@@ -1,9 +1,12 @@
+"""
+Least-squares curve fits
+"""
 from scipy.stats import median_abs_deviation
 from scipy.optimize import least_squares
 import numpy as np
 import pandas as pd
 
-from .curves import CURVES
+from .model import CURVES
 
 YCOL = "lbs_ft"
 TCOL = "day_of_season"
@@ -17,26 +20,43 @@ MIN_SAMPLES = 3              # skip seasons with fewer sample points than this
 
 def fit_one_season_to_curve(t, y, th=None, yh=None, curve="logistic"):
     """
-    Fit one farm-season to provided curve function.
+    Least-squares fit of one farm-season to a growth curve.
 
-    Curve function must be mapped to string in ``CURVES``.
-    (t, y) are the sample observations. (th, yh) are the harvest observations.
+    Not part of the Bayesian model. Samples and harvests stay on separate scales, samples against
+    `f(t)` and harvests against `c * f(t)`, the same split the Bayesian likelihood makes.
 
-    Includes initialization of curve parameters based on data and previous work.
+    Initialisation and bounds are data-driven, and the bounds double as the quality check: a
+    parameter pinned to one means this season does not identify the curve. `A0` is 1.5x the largest
+    sample since samples under-represent the late season; `t0` starts at the median sample day;
+    `k0 = 0.05` and `c0 = 0.65` come from prior work.
 
+    `soft_l1` loss keeps one extreme residual from dominating, and the sigmas use median absolute
+    deviation for the same reason. `sigma_h` needs more than 2 harvests to mean anything.
+
+    Args:
+        t (array-like): sample days.
+        y (array-like): sample yields in lbs/ft.
+        th (array-like | None): harvest days. None fits samples only, leaving `c` and `sigma_h` NaN.
+        yh (array-like | None): harvest yields in lbs/ft.
+        curve (str): key into `model.CURVES`. Defaults to "logistic".
+
+    Returns:
+        dict: the fitted A, k, t0, c, sigma, sigma_h, plus `rmse`, the point counts, and the quality
+            diagnostics. The diagnostics were determined by Claude and are an attempt to determine
+            which fitted parameters should be covered by the prior.
     """
     f = CURVES[curve]
     t, y = np.asarray(t, float), np.asarray(y, float)
 
-    # separate harvests from samples. On different scales due to measurement differences
+    # separate harvests from samples
     has_h = th is not None and yh is not None and len(np.atleast_1d(th)) > 0
+
     if has_h:
         th, yh = np.asarray(th, float), np.asarray(yh, float)
     
     # Data driven initialization of curve parameters
 
     # A0 guess: plateau is 1.5*max sample yield
-    # samples are usually taken before harvests, and thus are lacking in late season
     ymax = y.max()
     A0 = ymax * 1.5 
     # t0 guess: day of steepest observed increase in y is the median amongst all samples
@@ -56,8 +76,10 @@ def fit_one_season_to_curve(t, y, th=None, yh=None, curve="logistic"):
     lo = [1e-3, 1e-4, t_sorted.min()-150]
     hi = [3.0 * max(ymax, 0.1), 1.0, t_sorted.max()+150]
     x0 = [A0, k0, t0_0]
+
     if has_h: # add c bounds, likely not 0.1x samples and not 3x the samples
         lo, hi, x0 = lo + [0.1], hi + [3.0], x0 + [c0]
+
     x0 = np.clip(x0, lo, hi) # ensures the guesses are within the bounds
     # `soft_l1` is used to calculate the loss in the least_squares optimizer 
     # when fitting the curve to farm-season
@@ -69,14 +91,20 @@ def fit_one_season_to_curve(t, y, th=None, yh=None, curve="logistic"):
 
     def residuals(p):
         """
-        Calculates the residual between the model's prediction and the observed yield.
+        Stacked residuals for the optimiser at parameter vector `p`.
 
-        Calculates a harvest and sample residual if harvest is present in the farm-season.
+        Args:
+            p (array-like): `(A, k, t0)`, or `(A, k, t0, c)` when the season has harvests.
+
+        Returns:
+            np.ndarray: sample residuals, concatenated with harvest residuals when harvests are
+                present.
         """
         if has_h:
             A_, k_, t0_, c_ = p
             return np.concatenate([f(t, A_, k_, t0_) - y,
                                    c_ * f(th, A_, k_, t0_) - yh])
+
         return f(t, *p) - y
 
     # fit curve to farm-season, calculate residuals and sigma based on those residuals
@@ -103,13 +131,12 @@ def fit_one_season_to_curve(t, y, th=None, yh=None, curve="logistic"):
         rmse = float(np.sqrt(np.mean(r ** 2)))
         converged = bool(res.success)
     except Exception:
-        # if an exception occurred, set all parameters to NaN
         A = k = t0 = c = sigma = sigma_h = rmse = np.nan
         converged = False
 
     # Quality diagnostics that Claude came up with... need further investigation but kept
     # to be a placeholder for evaluating whether a parameter set should be included in the prior
-    # --- identifiability / quality diagnostics -----------------------------
+
     # Plateau is informed if any observations (samples or harvests) continued
     # past t0 + 1/k where the logistic curve reaches ~73% of its plateau
     t_obs_max = max(t_sorted.max(), th.max()) if has_h else t_sorted.max()
@@ -136,6 +163,7 @@ def fit_one_season_to_curve(t, y, th=None, yh=None, curve="logistic"):
     ok = (converged and np.isfinite(a_ratio) and not t0_at_bound
           and not c_at_bound and len(y) >= MIN_SAMPLES
           and (samples_saw_bend or a_ratio < 2.0))
+
     return dict(A=A, k=k, t0=t0, c=c, sigma=sigma, sigma_h=sigma_h,
                 rmse=rmse, n_samples=len(y),
                 n_harvests=int(len(yh)) if has_h else 0,
@@ -147,15 +175,24 @@ def fit_one_season_to_curve(t, y, th=None, yh=None, curve="logistic"):
 
 def build_parameter_cloud(df, curve="logistic"):
     """
-    Fit every farm-season; return one tagged row per season.
+    Fit every farm-season independently; one tagged row per season.
 
-    Samples + outplanting events split from harvest events. Have different measurement error.
-    Groups events by same farm-season, drops farm seasons with less than 3 sample events,
-    and fits a curve. Records the fitted curve's parameters, quality flags, + group metadata.
+    The parameter cloud the prior diagnostics are judged against. Outplants are included here as 0
+    lbs/ft points. Farm-seasons with fewer than `MIN_SAMPLES` points are skipped; they cannot pin a
+    three-parameter curve.
+
+    Args:
+        df (pd.DataFrame): events table with outplants, samples, and harvests.
+        curve (str): key into `model.CURVES`. Defaults to "logistic".
+
+    Returns:
+        pd.DataFrame: one row per fitted farm-season, worst `rmse` first.
     """
-    samples = df[(df["event"] == SAMPLE_EVENT) | (df["event"] == OUTPLANT_EVENT)].dropna(subset=[YCOL, TCOL])
+    is_sample_channel = (df["event"] == SAMPLE_EVENT) | (df["event"] == OUTPLANT_EVENT)
+    samples = df[is_sample_channel].dropna(subset=[YCOL, TCOL])
     harvests = df[df["event"] == HARVEST_EVENT].dropna(subset=[YCOL, TCOL])
     rows = []
+
     for fsid, g in samples.groupby(IDCOL):
         if len(g) < MIN_SAMPLES:
             continue
@@ -176,5 +213,7 @@ def build_parameter_cloud(df, curve="logistic"):
             "curve": curve,
         })
         rows.append(fit)
+
     cloud = pd.DataFrame(rows)
+
     return cloud.sort_values("rmse", ascending=False).reset_index(drop=True)
