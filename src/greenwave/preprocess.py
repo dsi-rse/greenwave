@@ -12,6 +12,8 @@ import pandas as pd
 YCOL, TCOL, IDCOL = "lbs_ft", "day_of_season", "farm_season_id"
 SAMPLE_EVENT, HARVEST_EVENT, OUTPLANT_EVENT = "sample", "harvest", "outplant"
 GROUP = ["Farm Name", "Season", "Species"]
+# older exports (e.g. 20260416) call the farm column "Anon Farm"
+FARM_ALIASES = {"Anon Farm": "Farm Name"}
 
 MODEL_SPECIES = "sugar_kelp"
 MIN_FARMS_PER_REGION = 3
@@ -73,7 +75,7 @@ def build_events(path: str) -> pd.DataFrame:
     Returns:
         pd.DataFrame: one row per event, unfiltered, with the flag columns above.
     """
-    logs = pd.read_excel(path, sheet_name="Logs")
+    logs = pd.read_excel(path, sheet_name="Logs").rename(columns=FARM_ALIASES)
     logs["Log Date"] = pd.to_datetime(logs["Log Date"]).dt.normalize()
     logs.dropna(subset=["Log Date"], inplace=True)
 
@@ -203,7 +205,7 @@ def load_line_events(xlsx, events):
     Returns:
         pd.DataFrame: `farm_season_id`, `day`, `Log Type`, `delta_ft` (signed feet).
     """
-    logs = pd.read_excel(xlsx, sheet_name="Logs")
+    logs = pd.read_excel(xlsx, sheet_name="Logs").rename(columns=FARM_ALIASES)
     logs["Log Date"] = pd.to_datetime(logs["Log Date"]).dt.normalize()
     logs = logs.dropna(subset=["Log Date"])
     sign = {"outplanting": 1.0, "line_loss": -1.0, "harvest": -1.0}
@@ -388,7 +390,7 @@ def load_dataset(xlsx, filters=DEFAULT_FILTERS, verbose=True):
         tuple[pd.DataFrame, dict]: the events, and `meta` with the source, file hash, filters, row
             and farm-season counts, per-filter survivors, and an 8-char `fingerprint`.
     """
-    path = Path(xlsx)
+    path = Path(xlsx).expanduser()
     file_hash = hashlib.sha1(path.read_bytes()).hexdigest()[:12]
     events = load_events(str(path))
     kept = {}
