@@ -1,6 +1,5 @@
-"""
-The model: growth curve, priors, fitting, prediction.
-"""
+"""The model: growth curve, priors, fitting, prediction."""
+
 from __future__ import annotations
 
 import hashlib
@@ -13,8 +12,15 @@ import pandas as pd
 import pymc as pm
 import pytensor.tensor as pt
 
-from .preprocess import (HARVEST_EVENT, IDCOL, SAMPLE_EVENT,
-                         TCOL, data_fingerprint, season_events, split)
+from .preprocess import (
+    HARVEST_EVENT,
+    IDCOL,
+    SAMPLE_EVENT,
+    TCOL,
+    data_fingerprint,
+    season_events,
+    split,
+)
 
 CURVE = "logistic"
 C_PARAM = "c"
@@ -65,27 +71,25 @@ def gompertz(t, A, k, t0, m=np):
 CURVES = {"logistic": logistic, "gompertz": gompertz}
 
 
-
 BROAD_PRIOR = {
     # 95% ~ 0.83 - 19 lbs/ft plateau
-    "A":       ("lognormal", np.log(4.0), 0.80),
+    "A": ("lognormal", np.log(4.0), 0.80),
     # 95% ~ 0.011 - 0.22 /day; k trades off against t0 along a ridge
-    "k":       ("lognormal", np.log(0.05), 0.75),
+    "k": ("lognormal", np.log(0.05), 0.75),
     # inflection late Dec - May; untruncated (P(t0<0) = 0.04%)
-    "t0":      ("normal", 150.0, 45.0),
+    "t0": ("normal", 150.0, 45.0),
     # harvest/sample scale, 95% ~ 0.33 - 1.3, deliberately asymmetric about 1
-    "c":       ("lognormal", np.log(0.65), 0.35),
+    "c": ("lognormal", np.log(0.65), 0.35),
     # sample noise, 95% ~ 0.10 - 2.4 lbs/ft against readings of ~0.3 - 2
-    "sigma":   ("lognormal", np.log(0.5), 0.80),
+    "sigma": ("lognormal", np.log(0.5), 0.80),
     # same spec as `sigma`: too few farm-seasons have enough harvests to
     # estimate a separate one, so it is tied rather than pretended
     "sigma_h": ("lognormal", np.log(0.5), 0.80),
 }
 
 
-#parameters defined on the log scale (family "lognormal")
-LOG_SCALE_PARAMS = tuple(p for p, d in BROAD_PRIOR.items()
-                         if d[0] == "lognormal")
+# parameters defined on the log scale (family "lognormal")
+LOG_SCALE_PARAMS = tuple(p for p, d in BROAD_PRIOR.items() if d[0] == "lognormal")
 
 
 def build_prior_rvs(broad_prior=None, dims=None):
@@ -126,8 +130,9 @@ def build_prior_rvs(broad_prior=None, dims=None):
 
 def broad_prior_fingerprint(broad_prior):
     """
-    Hash of a prior's definition. To determine if a prior has been changed and invalidates cached
-    results.
+    Hash of a prior's definition.
+
+    To determine if a prior has been changed and invalidates cached results.
 
     Args:
         broad_prior (dict): `param -> (family, a, b)`.
@@ -135,10 +140,14 @@ def broad_prior_fingerprint(broad_prior):
     Returns:
         str: first 8 hex characters of the SHA-1 of the sorted spec.
     """
-    payload = repr(sorted((k, v[0], round(float(v[1]), 12), round(float(v[2]), 12))
-                          for k, v in broad_prior.items()))
+    payload = repr(
+        sorted(
+            (k, v[0], round(float(v[1]), 12), round(float(v[2]), 12))
+            for k, v in broad_prior.items()
+        )
+    )
 
-    return hashlib.sha1(payload.encode()).hexdigest()[:8]
+    return hashlib.sha1(payload.encode(), usedforsecurity=False).hexdigest()[:8]
 
 
 def harvest_scale(draws, c_param=None):
@@ -160,9 +169,21 @@ def harvest_scale(draws, c_param=None):
     return np.asarray(draws["c"], float)
 
 
-def posterior_mcmc(define_priors, curve_name, t, y, th=None, yh=None, draws=1000,
-                   tune=1000, chains=2, target_accept=0.9, rng=0,
-                   progressbar=False, c_param=None):
+def posterior_mcmc(
+    define_priors,
+    curve_name,
+    t,
+    y,
+    th=None,
+    yh=None,
+    draws=1000,
+    tune=1000,
+    chains=2,
+    target_accept=0.9,
+    rng=0,
+    progressbar=False,
+    c_param=None,
+):
     """
     NUTS posterior for one farm-season.
 
@@ -205,23 +226,33 @@ def posterior_mcmc(define_priors, curve_name, t, y, th=None, yh=None, draws=1000
         A, k, t0, sigma = pri["A"], pri["k"], pri["t0"], pri["sigma"]
         # calculate the likelihood of the data given the parameters
         if len(t):
-            pm.StudentT("obs_s", nu=NU, mu=curve_fn(t, A, k, t0, m=pt),
-                        sigma=sigma, observed=y)
+            pm.StudentT("obs_s", nu=NU, mu=curve_fn(t, A, k, t0, m=pt), sigma=sigma, observed=y)
         if has_h:
             scale = pri[scale_name]
-            pm.StudentT("obs_h", nu=NU,
-                        mu=scale * curve_fn(th, A, k, t0, m=pt),
-                        sigma=pri["sigma_h"], observed=yh)
-        idata = pm.sample(draws=draws, tune=tune, chains=chains, cores=1,
-                          target_accept=target_accept, random_seed=rng,
-                          progressbar=progressbar, compute_convergence_checks=False)
+            pm.StudentT(
+                "obs_h",
+                nu=NU,
+                mu=scale * curve_fn(th, A, k, t0, m=pt),
+                sigma=pri["sigma_h"],
+                observed=yh,
+            )
+        idata = pm.sample(
+            draws=draws,
+            tune=tune,
+            chains=chains,
+            cores=1,
+            target_accept=target_accept,
+            random_seed=rng,
+            progressbar=progressbar,
+            compute_convergence_checks=False,
+        )
 
     # get the posterior distributions per model parameter
     post = {}
 
     for p in ["A", "k", "t0", "sigma", "sigma_h", scale_name]:
         if p in idata.posterior:
-            post[p] = idata.posterior[p].values.reshape(-1)
+            post[p] = idata.posterior[p].to_numpy().reshape(-1)
 
     n = len(post["A"])
 
@@ -231,19 +262,28 @@ def posterior_mcmc(define_priors, curve_name, t, y, th=None, yh=None, draws=1000
         post.setdefault(scale_name, pri_draws.get(scale_name, np.full(n, np.nan)))
         post.setdefault("sigma_h", pri_draws.get("sigma_h", np.full(n, np.nan)))
 
-    summ = az.summary(idata, var_names=[v for v in ["A", "k", "t0", scale_name]
-                                        if v in idata.posterior], kind="diagnostics")
+    summ = az.summary(
+        idata,
+        var_names=[v for v in ["A", "k", "t0", scale_name] if v in idata.posterior],
+        kind="diagnostics",
+    )
     post["rhat_max"] = float(summ["r_hat"].max())
-    post["divergences"] = int(idata.sample_stats.diverging.values.sum())
+    post["divergences"] = int(idata.sample_stats.diverging.to_numpy().sum())
     post["ess"] = float(summ["ess_bulk"].min())
     post["method"] = "mcmc"
 
     return post
 
 
-def make_prior_for_season(cloud=None, farm=None, before_season=None,
-                          method="broad", dims=None, verbose=False,
-                          broad_prior=None):
+def make_prior_for_season(
+    cloud=None,
+    farm=None,
+    before_season=None,
+    method="broad",
+    dims=None,
+    verbose=False,
+    broad_prior=None,
+):
     """
     The prior for one target farm-season, as PyMC random variables.
 
@@ -265,8 +305,10 @@ def make_prior_for_season(cloud=None, farm=None, before_season=None,
         dict: `param -> pm RV`.
     """
     if method != "broad":
-        raise ValueError(f"unknown prior method {method!r} (only 'broad'; "
-                         f"partial pooling is not implemented yet)")
+        raise ValueError(
+            f"unknown prior method {method!r} (only 'broad'; "
+            f"partial pooling is not implemented yet)"
+        )
 
     if verbose:
         print(f"  {farm} {before_season}: broad prior (no history used)")
@@ -292,8 +334,8 @@ def sample_prior(define_priors, n=4000, rng=None):
 
     seed = 0 if rng is None else rng
 
-    if not isinstance(seed, (int, np.integer)):
-        seed = int(np.random.default_rng(seed).integers(2 ** 31))
+    if not isinstance(seed, int | np.integer):
+        seed = int(np.random.default_rng(seed).integers(2**31))
 
     names = list(pri)
     drawn = pm.draw([pri[name] for name in names], n, random_seed=seed)
@@ -302,13 +344,20 @@ def sample_prior(define_priors, n=4000, rng=None):
 
 
 # sampler configuration defaults
-SAMPLER_DEFAULTS = dict(draws=1000, tune=1000, chains=4, target_accept=0.9, seed=0)
+SAMPLER_DEFAULTS = {"draws": 1000, "tune": 1000, "chains": 4, "target_accept": 0.9, "seed": 0}
+
+# convergence thresholds the diagnostics report against
+RHAT_OK = 1.01
+RHAT_LOOSE = 1.05
+ESS_MIN = 400
 
 
 #: posterior array to cache
 POSTERIOR_PARAMS_TO_KEEP = ("A", "k", "t0", "c", "sigma", "sigma_h")
 # diagnostics carried alongside draws from the posterior
 DIAGNOSTICS_TO_KEEP = ("method", "rhat_max", "divergences", "ess")
+# positions in a `PosteriorCache.key` tuple
+_KEY_PRIOR_SOURCE, _KEY_PRIOR_FINGERPRINT = 5, 6
 
 
 class Prior:
@@ -334,7 +383,8 @@ class Prior:
             raise ValueError(
                 "Prior needs an explicit meta['fingerprint'] -- use "
                 "model.broad_prior_fingerprint() on the prior's definition. "
-                "A fingerprint derived from samples is not stable.")
+                "A fingerprint derived from samples is not stable."
+            )
 
     def __call__(self, dims=None):
         """
@@ -349,7 +399,7 @@ class Prior:
         try:
             return self._build(dims)
         except TypeError:
-            return self._build()          # builders that take no arguments
+            return self._build()  # builders that take no arguments
 
     def __getitem__(self, key):
         """
@@ -402,8 +452,7 @@ def unpooled_prior_for(broad_prior=None, method="broad"):
     """
     prior_def = BROAD_PRIOR if broad_prior is None else broad_prior
     fingerprint = broad_prior_fingerprint(prior_def)
-    source = ("population (domain ranges)" if method == "broad"
-              else f"{method} prior")
+    source = "population (domain ranges)" if method == "broad" else f"{method} prior"
 
     def build(dims=None):
         """
@@ -415,8 +464,9 @@ def unpooled_prior_for(broad_prior=None, method="broad"):
         Returns:
             dict: `param -> pm RV`.
         """
-        return make_prior_for_season(None, None, None, method=method, dims=dims,
-                                     broad_prior=prior_def)
+        return make_prior_for_season(
+            None, None, None, method=method, dims=dims, broad_prior=prior_def
+        )
 
     def prior_for(fsid=None):
         """
@@ -428,8 +478,10 @@ def unpooled_prior_for(broad_prior=None, method="broad"):
         Returns:
             Prior: the deferred builder plus its metadata.
         """
-        return Prior(build, {"method": method, "source": source,
-                             "fingerprint": fingerprint, "c_param": C_PARAM})
+        return Prior(
+            build,
+            {"method": method, "source": source, "fingerprint": fingerprint, "c_param": C_PARAM},
+        )
 
     return prior_for
 
@@ -450,14 +502,12 @@ def prior_summary(prior, n=20000, rng=0, params=None):
         pd.DataFrame: indexed by `param`, with `median`, `lo95`, `hi95`, `width`.
     """
     draws = sample_prior(prior, n=n, rng=rng)
-    params = params or [p for p in ("A", "k", "t0", "c", "sigma", "sigma_h")
-                        if p in draws]
+    params = params or [p for p in ("A", "k", "t0", "c", "sigma", "sigma_h") if p in draws]
     rows = []
 
     for p in params:
         lo, med, hi = np.percentile(draws[p], [2.5, 50, 97.5])
-        rows.append({"param": p, "median": med, "lo95": lo, "hi95": hi,
-                     "width": hi - lo})
+        rows.append({"param": p, "median": med, "lo95": lo, "hi95": hi, "width": hi - lo})
 
     return pd.DataFrame(rows).set_index("param")
 
@@ -514,11 +564,20 @@ def fit_posterior(prior, seen, sampler=None, curve=CURVE, c_param=C_PARAM):
         post["method"] = "prior"
         return post
 
-    return posterior_mcmc(prior, curve, ts, ys,
-                          th if len(th) else None, yh if len(yh) else None,
-                          c_param=c_param, draws=s["draws"], tune=s["tune"],
-                          chains=s["chains"], target_accept=s["target_accept"],
-                          rng=s["seed"])
+    return posterior_mcmc(
+        prior,
+        curve,
+        ts,
+        ys,
+        th if len(th) else None,
+        yh if len(yh) else None,
+        c_param=c_param,
+        draws=s["draws"],
+        tune=s["tune"],
+        chains=s["chains"],
+        target_accept=s["target_accept"],
+        rng=s["seed"],
+    )
 
 
 class PosteriorCache:
@@ -560,7 +619,6 @@ class PosteriorCache:
         """
         return self.sampler
 
-
     def key(self, fsid, n_seen, seen, prior, sampler=None):
         """
         What uniquely determines these posterior draws.
@@ -578,11 +636,16 @@ class PosteriorCache:
         """
         s = {**self.sampler, **(sampler or {})}
 
-        return (fsid, n_seen, data_fingerprint(seen), self.curve,
-                POSTERIOR_PARAMS_TO_KEEP, prior["_meta"]["source"],
-                prior["_meta"].get("fingerprint"),
-                tuple(sorted(s.items())))
-
+        return (
+            fsid,
+            n_seen,
+            data_fingerprint(seen),
+            self.curve,
+            POSTERIOR_PARAMS_TO_KEEP,
+            prior["_meta"]["source"],
+            prior["_meta"].get("fingerprint"),
+            tuple(sorted(s.items())),
+        )
 
     def get(self, fsid, events, n_seen, prior, sampler=None, mcmc=None):
         """
@@ -610,13 +673,14 @@ class PosteriorCache:
             self.hits += 1
         else:
             self.misses += 1
-            post = fit_posterior(prior, seen, {**self.sampler, **(sampler or {})},
-                                 self.curve, self.c_param)
-            self.store[k] = ({p: post[p] for p in POSTERIOR_PARAMS_TO_KEEP if p in post}
-                             | {p: post[p] for p in DIAGNOSTICS_TO_KEEP if p in post})
+            post = fit_posterior(
+                prior, seen, {**self.sampler, **(sampler or {})}, self.curve, self.c_param
+            )
+            self.store[k] = {p: post[p] for p in POSTERIOR_PARAMS_TO_KEEP if p in post} | {
+                p: post[p] for p in DIAGNOSTICS_TO_KEEP if p in post
+            }
 
         return self.store[k]
-
 
     def counters(self):
         """
@@ -643,9 +707,11 @@ class PosteriorCache:
         hits, fitted = self.hits - before[0], self.misses - before[1]
 
         if hits or fitted:
-            print(f"  cache{' for ' + what if what else ''}: "
-                  f"{hits} hit{'' if hits == 1 else 's'}, {fitted} fitted"
-                  f"  ({len(self.store)} stored)")
+            print(
+                f"  cache{' for ' + what if what else ''}: "
+                f"{hits} hit{'' if hits == 1 else 's'}, {fitted} fitted"
+                f"  ({len(self.store)} stored)"
+            )
 
         return hits, fitted
 
@@ -657,11 +723,14 @@ class PosteriorCache:
             dict: entry count, hits, fits, every file read into it, where it was saved, and the
                 sampler tag.
         """
-        return {"entries": len(self.store), "hits": self.hits,
-                "fitted": self.misses,
-                "loaded_from": list(self.last_loaded),
-                "saved_to": self.last_saved,
-                "sampler": sampler_tag(self.sampler)}
+        return {
+            "entries": len(self.store),
+            "hits": self.hits,
+            "fitted": self.misses,
+            "loaded_from": list(self.last_loaded),
+            "saved_to": self.last_saved,
+            "sampler": sampler_tag(self.sampler),
+        }
 
     def posterior(self, prior, seen, fsid=None, sampler=None):
         """
@@ -677,7 +746,6 @@ class PosteriorCache:
             dict: the posterior, as from `get`.
         """
         return self.get(fsid or "-", seen, len(seen), prior, sampler)
-
 
     def save(self, name, directory, overwrite=False):
         """
@@ -703,26 +771,33 @@ class PosteriorCache:
         path = directory / f"{name}.pkl"
 
         if path.exists() and not overwrite:
-            with open(path, "rb") as fh:
-                existing = set(pickle.load(fh))
+            with path.open("rb") as fh:
+                existing = set(pickle.load(fh))  # noqa: S301 -- the project's own cache file
             lost = existing - set(self.store)
             if lost:
                 raise FileExistsError(
                     f"{path.name} holds {len(lost)} posteriors this cache does "
                     f"not have -- writing would drop them. Load it first "
                     f"(cache.load(...)), pick a different name "
-                    f"(model.cache_name(...)), or pass overwrite=True.")
+                    f"(model.cache_name(...)), or pass overwrite=True."
+                )
 
-        slim = {k: {kk: (vv.astype(np.float32) if isinstance(vv, np.ndarray) else vv)
-                    for kk, vv in v.items()}
-                for k, v in self.store.items()}
+        slim = {
+            k: {
+                kk: (vv.astype(np.float32) if isinstance(vv, np.ndarray) else vv)
+                for kk, vv in v.items()
+            }
+            for k, v in self.store.items()
+        }
 
-        with open(path, "wb") as fh:
+        with path.open("wb") as fh:
             pickle.dump(slim, fh, protocol=4)
 
         self.last_saved = str(path.resolve())
-        print(f"SAVED {len(slim)} posteriors -> {path.resolve()} "
-              f"({path.stat().st_size / 1e6:,.1f} MB)")
+        print(
+            f"SAVED {len(slim)} posteriors -> {path.resolve()} "
+            f"({path.stat().st_size / 1e6:,.1f} MB)"
+        )
 
         return path
 
@@ -752,8 +827,8 @@ class PosteriorCache:
             print(f"no cache at {path.resolve()}")
             return 0
 
-        with open(path, "rb") as fh:
-            loaded = pickle.load(fh)
+        with path.open("rb") as fh:
+            loaded = pickle.load(fh)  # noqa: S301 -- the project's own cache file
 
         if migrate is not None:
             out, dropped = {}, 0
@@ -763,24 +838,34 @@ class PosteriorCache:
                     dropped += 1
                 else:
                     out[nk] = v
-            print(f"migrated {len(out)} keys from {path.name}"
-                  + (f", dropped {dropped} that no longer match the data" if dropped else ""))
+            print(
+                f"migrated {len(out)} keys from {path.name}"
+                + (f", dropped {dropped} that no longer match the data" if dropped else "")
+            )
             loaded = out
 
-        loaded = {k: {kk: (vv.astype(float) if isinstance(vv, np.ndarray) else vv)
-                      for kk, vv in v.items()}
-                  for k, v in loaded.items()}
+        loaded = {
+            k: {
+                kk: (vv.astype(float) if isinstance(vv, np.ndarray) else vv) for kk, vv in v.items()
+            }
+            for k, v in loaded.items()
+        }
 
         if not merge:
             self.store.clear()
 
         self.store.update(loaded)
-        fps = {k[KEY_FINGERPRINT_INDEX] for k in loaded
-               if isinstance(k, tuple) and len(k) > KEY_FINGERPRINT_INDEX}
+        fps = {
+            k[KEY_FINGERPRINT_INDEX]
+            for k in loaded
+            if isinstance(k, tuple) and len(k) > KEY_FINGERPRINT_INDEX
+        }
         self.last_loaded.append(str(path.resolve()))
-        print(f"LOADED {len(loaded)} posteriors from {path.resolve()} "
-              f"({len(fps)} distinct prior fingerprint"
-              f"{'s' if len(fps) != 1 else ''}: {', '.join(sorted(map(str, fps)))})")
+        print(
+            f"LOADED {len(loaded)} posteriors from {path.resolve()} "
+            f"({len(fps)} distinct prior fingerprint"
+            f"{'s' if len(fps) != 1 else ''}: {', '.join(sorted(map(str, fps)))})"
+        )
 
         return len(loaded)
 
@@ -803,9 +888,8 @@ class PosteriorCache:
         return len(self.store)
 
 
-
 # Claude's code to hash a posterior run!
-KEY_FINGERPRINT_INDEX = 6   # (fsid, n_seen, data_fp, curve, KEEP, source, FP, sampler)
+KEY_FINGERPRINT_INDEX = 6  # (fsid, n_seen, data_fp, curve, KEEP, source, FP, sampler)
 
 
 def q95(x):
@@ -986,11 +1070,16 @@ def joint_mode_prediction(post, day, c_param=C_PARAM, curve=CURVE):
             non-degenerate draws, since rank-1 draws give the KDE a singular covariance.
     """
     from scipy.stats import gaussian_kde
+
     sc = harvest_scale(post, c_param)
     arrs, names = [], []
 
-    for name, v, logit in [("A", post["A"], True), ("k", post["k"], True),
-                           ("t0", post["t0"], False), ("scale", sc, True)]:
+    for name, v, logit in [
+        ("A", post["A"], True),
+        ("k", post["k"], True),
+        ("t0", post["t0"], False),
+        ("scale", sc, True),
+    ]:
         if name == "scale" and not np.isfinite(v).any():
             continue
         arrs.append(np.log(v) if logit else v)
@@ -999,8 +1088,7 @@ def joint_mode_prediction(post, day, c_param=C_PARAM, curve=CURVE):
     X = np.vstack(arrs)
     X = X[:, np.isfinite(X).all(axis=0)]
     best = X[:, np.argmax(gaussian_kde(X)(X))]
-    vals = {n: (float(np.exp(b)) if n != "t0" else float(b))
-            for n, b in zip(names, best)}
+    vals = {n: (float(np.exp(b)) if n != "t0" else float(b)) for n, b in zip(names, best)}
     f = CURVES[curve]
 
     return vals.get("scale", np.nan) * f(day, vals["A"], vals["k"], vals["t0"])
@@ -1053,12 +1141,21 @@ class SeasonModel:
         """
         obs = season_events(self.events, fsid)
         g = self.events[self.events[IDCOL] == fsid]
-        date_of = dict(zip(g[TCOL].astype(float),
-                           pd.to_datetime(g["Log Date"]).dt.date))
-        t = pd.DataFrame([{"n": i + 1, "date": date_of.get(d), "day": d,
-                           "event": k, "lbs_ft": v, "line_ft": lf,
-                           "weight_lbs": w}
-                          for i, (d, v, k, lf, w) in enumerate(obs)])
+        date_of = dict(zip(g[TCOL].astype(float), pd.to_datetime(g["Log Date"]).dt.date))
+        t = pd.DataFrame(
+            [
+                {
+                    "n": i + 1,
+                    "date": date_of.get(d),
+                    "day": d,
+                    "event": k,
+                    "lbs_ft": v,
+                    "line_ft": lf,
+                    "weight_lbs": w,
+                }
+                for i, (d, v, k, lf, w) in enumerate(obs)
+            ]
+        )
 
         return t.set_index("n") if len(t) else t
 
@@ -1077,7 +1174,7 @@ class SeasonModel:
         Returns:
             float: the day of season.
         """
-        if isinstance(as_of, (int, float, np.integer, np.floating)):
+        if isinstance(as_of, int | float | np.integer | np.floating):
             return float(as_of)
 
         g = self.events[self.events[IDCOL] == fsid]
@@ -1124,8 +1221,7 @@ class SeasonModel:
             n_obs = sum(1 for d, *_ in obs if (d <= day if inclusive else d < day))
 
         n_obs = int(min(n_obs, len(obs)))
-        post = dict(self.cache.get(fsid, obs, n_obs, self.prior_for(fsid),
-                                   self.sampler))
+        post = dict(self.cache.get(fsid, obs, n_obs, self.prior_for(fsid), self.sampler))
         # provenance, so predict() can report the extrapolation gap
         post["_fsid"] = fsid
         post["_n_seen"] = n_obs
@@ -1162,8 +1258,12 @@ class SeasonModel:
         """
         c_param = C_PARAM
         (y_med, y_lo, y_hi), (_, r_lo, r_hi) = harvest_intervals(
-            post, day, (post.get("_fsid", "-"), day, post.get("_n_seen", 0),
-                        "predict"), c_param, self.cache.curve)
+            post,
+            day,
+            (post.get("_fsid", "-"), day, post.get("_n_seen", 0), "predict"),
+            c_param,
+            self.cache.curve,
+        )
 
         s_med, s_lo, s_hi = sample_interval(post, day, self.cache.curve)
 
@@ -1172,31 +1272,42 @@ class SeasonModel:
         elif estimator == "mean":
             s_med, y_med = point_estimate(post, day, "mean", c_param, self.cache.curve)
 
-        out = {"farm_season_id": post.get("_fsid"), "day": float(day),
-               "estimator": estimator,
-               "n_obs_seen": post.get("_n_seen"),
-               "last_obs_day": post.get("_last_day"),
-               "gap_days": float(day) - post.get("_last_day", np.nan),
-               "sample_lbs_ft": s_med,
-               "harvest_lbs_ft": y_med,
-               "yield_lo95": y_lo, "yield_hi95": y_hi,
-               "reading_lo95": r_lo, "reading_hi95": r_hi,
-               # numeric, not a formatted string: a Series with a string in
-               # it cannot be rounded or arithmetic'd
-               "r_hat": post.get("rhat_max", np.nan),
-               "ess": post.get("ess", np.nan)}
+        out = {
+            "farm_season_id": post.get("_fsid"),
+            "day": float(day),
+            "estimator": estimator,
+            "n_obs_seen": post.get("_n_seen"),
+            "last_obs_day": post.get("_last_day"),
+            "gap_days": float(day) - post.get("_last_day", np.nan),
+            "sample_lbs_ft": s_med,
+            "harvest_lbs_ft": y_med,
+            "yield_lo95": y_lo,
+            "yield_hi95": y_hi,
+            "reading_lo95": r_lo,
+            "reading_hi95": r_hi,
+            # numeric, not a formatted string: a Series with a string in
+            # it cannot be rounded or arithmetic'd
+            "r_hat": post.get("rhat_max", np.nan),
+            "ess": post.get("ess", np.nan),
+        }
 
         if line_ft is not None:
-            out.update({"line_ft": float(line_ft),
-                        "lbs": y_med * line_ft,
-                        "lbs_lo95": y_lo * line_ft, "lbs_hi95": y_hi * line_ft,
-                        "lbs_reading_lo95": r_lo * line_ft,
-                        "lbs_reading_hi95": r_hi * line_ft})
+            out.update(
+                {
+                    "line_ft": float(line_ft),
+                    "lbs": y_med * line_ft,
+                    "lbs_lo95": y_lo * line_ft,
+                    "lbs_hi95": y_hi * line_ft,
+                    "lbs_reading_lo95": r_lo * line_ft,
+                    "lbs_reading_hi95": r_hi * line_ft,
+                }
+            )
 
         return pd.Series(out)
 
-    def predict_at(self, fsid, day, as_of=None, n_obs=None, estimator="median",
-                   line_ft=None, inclusive=False):
+    def predict_at(
+        self, fsid, day, as_of=None, n_obs=None, estimator="median", line_ft=None, inclusive=False
+    ):
         """
         `posterior` then `predict` in one call.
 
@@ -1237,7 +1348,7 @@ class SeasonModel:
         obs_cache = {}
 
         for k, v in self.cache.store.items():
-            if not (isinstance(k, tuple) and len(k) > 6):
+            if not (isinstance(k, tuple) and len(k) > _KEY_PRIOR_FINGERPRINT):
                 continue
             fsid, n_seen = k[0], k[1]
             if fsid not in obs_cache:
@@ -1247,14 +1358,19 @@ class SeasonModel:
                     obs_cache[fsid] = []
             obs = obs_cache[fsid]
             seen = obs[:n_seen]
-            rows.append({
-                "farm_season_id": fsid, "n_seen": n_seen,
-                "as_of_day": seen[-1][0] if seen else np.nan,
-                "n_samples": sum(1 for e in seen if e[2] == SAMPLE_EVENT),
-                "n_harvests": sum(1 for e in seen if e[2] == HARVEST_EVENT),
-                "prior_source": k[5], "method": v.get("method", "?"),
-                "r_hat": v.get("rhat_max", np.nan), "ess": v.get("ess", np.nan),
-            })
+            rows.append(
+                {
+                    "farm_season_id": fsid,
+                    "n_seen": n_seen,
+                    "as_of_day": seen[-1][0] if seen else np.nan,
+                    "n_samples": sum(1 for e in seen if e[2] == SAMPLE_EVENT),
+                    "n_harvests": sum(1 for e in seen if e[2] == HARVEST_EVENT),
+                    "prior_source": k[_KEY_PRIOR_SOURCE],
+                    "method": v.get("method", "?"),
+                    "r_hat": v.get("rhat_max", np.nan),
+                    "ess": v.get("ess", np.nan),
+                }
+            )
 
         t = pd.DataFrame(rows)
 
@@ -1272,11 +1388,17 @@ class SeasonModel:
         Returns:
             pd.DataFrame: the season replay.
         """
-        from .evaluate import season_report   # late: evaluate imports model
+        from .evaluate import season_report  # late: evaluate imports model
 
-        return season_report(self.events, fsid, self.prior_for, self.cache,
-                             sampler=self.sampler, line_events=self.line_events,
-                             **kw)
+        return season_report(
+            self.events,
+            fsid,
+            self.prior_for,
+            self.cache,
+            sampler=self.sampler,
+            line_events=self.line_events,
+            **kw,
+        )
 
 
 # --------------------------------------------------------------------------
@@ -1310,19 +1432,34 @@ def posterior_diagnostics(cache, fsids=None):
         fsid, n_seen = (k[0], k[1]) if isinstance(k, tuple) else ("?", None)
         if fsids is not None and fsid not in fsids:
             continue
-        rows.append({"farm_season_id": fsid, "n_seen": n_seen,
-                     "method": v.get("method", "?"),
-                     "r_hat": v.get("rhat_max", np.nan),
-                     "ess": v.get("ess", np.nan),
-                     "divergences": v.get("divergences", np.nan),
-                     "prior_source": k[5] if isinstance(k, tuple) and len(k) > 5 else "?"})
+        rows.append(
+            {
+                "farm_season_id": fsid,
+                "n_seen": n_seen,
+                "method": v.get("method", "?"),
+                "r_hat": v.get("rhat_max", np.nan),
+                "ess": v.get("ess", np.nan),
+                "divergences": v.get("divergences", np.nan),
+                "prior_source": (
+                    k[_KEY_PRIOR_SOURCE]
+                    if isinstance(k, tuple) and len(k) > _KEY_PRIOR_SOURCE
+                    else "?"
+                ),
+            }
+        )
 
     t = pd.DataFrame(rows)
 
     if len(t):
-        t["flag"] = np.where(t["divergences"].fillna(0) > 0, "divergences",
-                    np.where(t["r_hat"] > 1.01, "r_hat>1.01",
-                    np.where(t["ess"] < 400, "ess<400", "")))
+        t["flag"] = np.where(
+            t["divergences"].fillna(0) > 0,
+            "divergences",
+            np.where(
+                t["r_hat"] > RHAT_OK,
+                f"r_hat>{RHAT_OK}",
+                np.where(t["ess"] < ESS_MIN, f"ess<{ESS_MIN}", ""),
+            ),
+        )
 
     return t
 
@@ -1349,12 +1486,12 @@ def diagnostics_summary(diag, quiet=False):
     out = {
         "posteriors fitted": len(fitted),
         "prior-only rows": int((diag["method"] == "prior").sum()),
-        "% r_hat <= 1.01": 100 * (fitted["r_hat"] <= 1.01).mean(),
-        "% r_hat <= 1.05": 100 * (fitted["r_hat"] <= 1.05).mean(),
+        f"% r_hat <= {RHAT_OK}": 100 * (fitted["r_hat"] <= RHAT_OK).mean(),
+        f"% r_hat <= {RHAT_LOOSE}": 100 * (fitted["r_hat"] <= RHAT_LOOSE).mean(),
         "worst r_hat": fitted["r_hat"].max(),
         "median ess": fitted["ess"].median(),
         "min ess": fitted["ess"].min(),
-        "n with ess < 400": int((fitted["ess"] < 400).sum()),
+        f"n with ess < {ESS_MIN}": int((fitted["ess"] < ESS_MIN).sum()),
         "n with divergences": int((fitted["divergences"].fillna(0) > 0).sum()),
     }
 
@@ -1364,8 +1501,11 @@ def diagnostics_summary(diag, quiet=False):
         worst = fitted[fitted["flag"] != ""].sort_values("ess")
         if len(worst):
             print(f"  worst offenders (of {len(worst)} flagged):")
-            print(worst.head(5)[["farm_season_id", "n_seen", "r_hat", "ess",
-                                 "divergences", "flag"]].to_string(index=False))
+            print(
+                worst.head(5)[
+                    ["farm_season_id", "n_seen", "r_hat", "ess", "divergences", "flag"]
+                ].to_string(index=False)
+            )
 
     return out
 
@@ -1405,12 +1545,12 @@ def forecast_mc_error(post, day, c_param=C_PARAM, curve=CURVE, probs=(0.025, 0.5
         dict: `posterior_sd`, `mcse_mean`, one `mcse_q` per entry in `probs`, and `ess`.
     """
     import arviz as az
+
     f = CURVES[curve]
     g = harvest_scale(post, c_param) * f(day, post["A"], post["k"], post["t0"])
     chains = max(int(post.get("n_chains", 4)), 1)
     g2 = g.reshape(chains, -1) if g.size % chains == 0 else g.reshape(1, -1)
-    out = {"posterior_sd": float(np.std(g)),
-           "mcse_mean": float(az.mcse(g2, method="mean"))}
+    out = {"posterior_sd": float(np.std(g)), "mcse_mean": float(az.mcse(g2, method="mean"))}
 
     for p in probs:
         out[f"mcse_q{p:g}"] = float(az.mcse(g2, method="quantile", prob=p))
@@ -1434,8 +1574,10 @@ def sampler_tag(sampler=None):
     """
     s = {**SAMPLER_DEFAULTS, **(sampler or {})}
 
-    return (f"d{s['draws']}_t{s['tune']}_c{s['chains']}"
-            f"_ta{int(round(s['target_accept'] * 100))}_s{s['seed']}")
+    return (
+        f"d{s['draws']}_t{s['tune']}_c{s['chains']}"
+        f"_ta{int(round(s['target_accept'] * 100))}_s{s['seed']}"
+    )
 
 
 def cache_name(prefix, label="", sampler=None, data_meta=None, prior=None):
@@ -1476,5 +1618,3 @@ def cache_name(prefix, label="", sampler=None, data_meta=None, prior=None):
         parts.append(f"x{fp}")
 
     return "_".join(parts)
-
-

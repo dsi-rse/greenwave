@@ -32,9 +32,7 @@ def extract_line_numbers(note):
     """Pull line numbers out of free-text Notes (e.g. 'line 3 and 5')."""
     found = []
     if isinstance(note, str):
-        for match in re.finditer(
-            r"\blines?\b[\s:=>/]*([\d,\s&]+(?:and[\s\d,&]+)*)", note.lower()
-        ):
+        for match in re.finditer(r"\blines?\b[\s:=>/]*([\d,\s&]+(?:and[\s\d,&]+)*)", note.lower()):
             for c in re.findall(r"\d+", match.group(1)):
                 num = int(c)
                 if num not in found:
@@ -48,6 +46,7 @@ logs["n_lines"] = logs["line_numbers"].apply(len)
 
 
 def line_key(row):
+    """Label a log row by its line: one number, several ("multi: ..."), or "unspecified"."""
     if row["n_lines"] == 0:
         return "unspecified"
     if row["n_lines"] == 1:
@@ -91,7 +90,7 @@ def rollup_tags(g, panel_tag_lists):
         tags.update(panel_tags)
     # Species variety (only meaningful at farm-season level)
     species = g["species_key"][g["species_key"] != "unspecified"].unique()
-    if len(species) >= 2:
+    if len(species) >= 2:  # noqa: PLR2004 -- "multi" means more than one
         tags.add("multi-species")
     # Analysis-ready: this farm-season has at least 1 sample AND at least 1 harvest
     # (somewhere among its plots, not necessarily in the same plot)
@@ -105,11 +104,13 @@ def rollup_tags(g, panel_tag_lists):
 # --- Build farm-season records ------------------------------------------
 print("Building farm-season records...")
 
+
 def date_str(d):
     """Convert pandas Timestamp to ISO date string (or None if NaN)."""
     if pd.isna(d):
         return None
     return pd.Timestamp(d).strftime("%Y-%m-%d")
+
 
 farm_seasons = []
 for (farm, season), g in sh.groupby(["Anon Farm", "Season"]):
@@ -130,11 +131,13 @@ for (farm, season), g in sh.groupby(["Anon Farm", "Season"]):
         # Convert each sample to a small dict
         sample_records = []
         for _, r in samples.iterrows():
-            sample_records.append({
-                "date": date_str(r["Log Date"]),
-                "weight": None if pd.isna(r["Weight"]) else float(r["Weight"]),
-                "notes": str(r["Notes"])[:140] if pd.notna(r["Notes"]) else "",
-            })
+            sample_records.append(
+                {
+                    "date": date_str(r["Log Date"]),
+                    "weight": None if pd.isna(r["Weight"]) else float(r["Weight"]),
+                    "notes": str(r["Notes"])[:140] if pd.notna(r["Notes"]) else "",
+                }
+            )
 
         # Convert each harvest to a small dict (compute yield if possible)
         harvest_records = []
@@ -144,32 +147,38 @@ for (farm, season), g in sh.groupby(["Anon Farm", "Season"]):
             yield_val = None
             if weight is not None and line_length is not None and line_length > 0:
                 yield_val = weight / line_length
-            harvest_records.append({
-                "date": date_str(r["Log Date"]),
-                "weight": weight,
-                "line_length": line_length,
-                "yield_lb_per_ft": yield_val,
-                "notes": str(r["Notes"])[:140] if pd.notna(r["Notes"]) else "",
-            })
+            harvest_records.append(
+                {
+                    "date": date_str(r["Log Date"]),
+                    "weight": weight,
+                    "line_length": line_length,
+                    "yield_lb_per_ft": yield_val,
+                    "notes": str(r["Notes"])[:140] if pd.notna(r["Notes"]) else "",
+                }
+            )
 
-        panels.append({
-            "species": species,
-            "line": line,
-            "n_samples": len(samples),
-            "n_harvests": len(harvests),
-            "tags": panel_tags(len(samples), len(harvests), line, samples, harvests),
-            "samples": sample_records,
-            "harvests": harvest_records,
-        })
+        panels.append(
+            {
+                "species": species,
+                "line": line,
+                "n_samples": len(samples),
+                "n_harvests": len(harvests),
+                "tags": panel_tags(len(samples), len(harvests), line, samples, harvests),
+                "samples": sample_records,
+                "harvests": harvest_records,
+            }
+        )
 
-    farm_seasons.append({
-        "farm": farm,
-        "season": season,
-        "id": f"{farm}__{season}".replace(" ", "_").replace("/", "-"),
-        "tags": rollup_tags(g, [p["tags"] for p in panels]),
-        "n_panels": len(panels),
-        "panels": panels,
-    })
+    farm_seasons.append(
+        {
+            "farm": farm,
+            "season": season,
+            "id": f"{farm}__{season}".replace(" ", "_").replace("/", "-"),
+            "tags": rollup_tags(g, [p["tags"] for p in panels]),
+            "n_panels": len(panels),
+            "panels": panels,
+        }
+    )
 
 # Sort: farm name, then season
 farm_seasons.sort(key=lambda x: (x["farm"], x["season"]))
@@ -193,7 +202,7 @@ output = {
 
 # --- Write JSON ---------------------------------------------------------
 OUTPUT_FILE.parent.mkdir(exist_ok=True, parents=True)
-with open(OUTPUT_FILE, "w") as f:
+with OUTPUT_FILE.open("w") as f:
     json.dump(output, f, separators=(",", ":"))  # minified
 
 size_kb = OUTPUT_FILE.stat().st_size / 1024

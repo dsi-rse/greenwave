@@ -1,6 +1,5 @@
-"""
-Preprocess GreenWave's data
-"""
+"""Preprocess GreenWave's data"""
+
 from __future__ import annotations
 
 import hashlib
@@ -14,15 +13,21 @@ SAMPLE_EVENT, HARVEST_EVENT, OUTPLANT_EVENT = "sample", "harvest", "outplant"
 GROUP = ["Farm Name", "Season", "Species"]
 # older exports (e.g. 20260416) call the farm column "Anon Farm"
 FARM_ALIASES = {"Anon Farm": "Farm Name"}
+# a season's days are counted from the 1st of this month
+SEASON_START_MONTH = 10
 
 MODEL_SPECIES = "sugar_kelp"
 MIN_FARMS_PER_REGION = 3
-#leeway on "total line harvested must not exceed what was outplanted"
+# leeway on "total line harvested must not exceed what was outplanted"
 LINE_TOLERANCE = 0.0
 
 # the per-event flags every model run applies
-DEFAULT_FILTERS = ("flag_model_species", "flag_has_outplant_date",
-                   "flag_harvest_within_available", "flag_after_seed")
+DEFAULT_FILTERS = (
+    "flag_model_species",
+    "flag_has_outplant_date",
+    "flag_harvest_within_available",
+    "flag_after_seed",
+)
 
 
 def day_of_season(ts) -> int:
@@ -42,8 +47,11 @@ def day_of_season(ts) -> int:
         int: days from the preceding Oct 1.
     """
     ts = pd.Timestamp(ts)
-    oct1 = pd.Timestamp(year=ts.year if ts.month >= 10 else ts.year - 1,
-                            month=10, day=1)
+    oct1 = pd.Timestamp(
+        year=ts.year if ts.month >= SEASON_START_MONTH else ts.year - 1,
+        month=SEASON_START_MONTH,
+        day=1,
+    )
 
     return (ts - oct1).days
 
@@ -77,46 +85,62 @@ def build_events(path: str) -> pd.DataFrame:
     """
     logs = pd.read_excel(path, sheet_name="Logs").rename(columns=FARM_ALIASES)
     logs["Log Date"] = pd.to_datetime(logs["Log Date"]).dt.normalize()
-    logs.dropna(subset=["Log Date"], inplace=True)
+    logs = logs.dropna(subset=["Log Date"])
 
     outplant = logs[logs["Log Type"] == "outplanting"].copy()
     samples = logs[logs["Log Type"] == "sample"].copy()
     harvest = logs[logs["Log Type"] == "harvest"].copy()
 
-    loss_types = [t for t in logs["Log Type"].dropna().unique()
-                      if "loss" in str(t).lower()]
+    loss_types = [t for t in logs["Log Type"].dropna().unique() if "loss" in str(t).lower()]
     loss = logs[logs["Log Type"].isin(loss_types)].copy()
 
     # get the total line outplanted, lost, and harvested in a farm-season
     # not a running total but the final amounts
-    grp_outplant = (outplant.groupby(GROUP)
-        .agg(seed_date=("Log Date", "min"),
-             last_outplant_date=("Log Date", "max"),
-             n_outplant_dates=("Log Date", "nunique"),
-             outplant_line_ft=("Line Length", "sum")).reset_index())
+    grp_outplant = (
+        outplant.groupby(GROUP)
+        .agg(
+            seed_date=("Log Date", "min"),
+            last_outplant_date=("Log Date", "max"),
+            n_outplant_dates=("Log Date", "nunique"),
+            outplant_line_ft=("Line Length", "sum"),
+        )
+        .reset_index()
+    )
 
-    grp_harvest = (harvest.dropna(subset=["Weight"]).groupby(GROUP)
-        .agg(true_biomass_lbs=("Weight", "sum"),
-             harvest_line_ft=("Line Length", "sum"),
-             n_harvests=("Weight", "size")).reset_index())
+    grp_harvest = (
+        harvest.dropna(subset=["Weight"])
+        .groupby(GROUP)
+        .agg(
+            true_biomass_lbs=("Weight", "sum"),
+            harvest_line_ft=("Line Length", "sum"),
+            n_harvests=("Weight", "size"),
+        )
+        .reset_index()
+    )
 
-    grp_loss = (loss.groupby(GROUP).agg(loss_line_ft=("Line Length", "sum"))
-                .reset_index()
-                if len(loss) else pd.DataFrame(columns=GROUP + ["loss_line_ft"]))
+    grp_loss = (
+        loss.groupby(GROUP).agg(loss_line_ft=("Line Length", "sum")).reset_index()
+        if len(loss)
+        else pd.DataFrame(columns=GROUP + ["loss_line_ft"])
+    )
 
-    grp_outplant["outplant_spread_days"] = (grp_outplant["last_outplant_date"]
-                                            - grp_outplant["seed_date"])
-    group_biomass = (grp_outplant.merge(grp_harvest, on=GROUP, how="left")
-                          .merge(grp_loss, on=GROUP, how="left"))
+    grp_outplant["outplant_spread_days"] = (
+        grp_outplant["last_outplant_date"] - grp_outplant["seed_date"]
+    )
+    group_biomass = grp_outplant.merge(grp_harvest, on=GROUP, how="left").merge(
+        grp_loss, on=GROUP, how="left"
+    )
     group_biomass["loss_line_ft"] = group_biomass["loss_line_ft"].fillna(0.0)
-    group_biomass["available_line_ft"] = (group_biomass["outplant_line_ft"]
-                                          - group_biomass["loss_line_ft"])
+    group_biomass["available_line_ft"] = (
+        group_biomass["outplant_line_ft"] - group_biomass["loss_line_ft"]
+    )
     group_biomass["flag_single_outplant"] = group_biomass["n_outplant_dates"] == 1
     group_biomass["n_harvests"] = group_biomass["n_harvests"].fillna(0.0)
     group_biomass["flag_has_harvest"] = group_biomass["n_harvests"] > 0
     group_biomass["flag_harvest_within_available"] = ~group_biomass["flag_has_harvest"] | (
-            group_biomass["harvest_line_ft"]
-            <= group_biomass["available_line_ft"] * (1 + LINE_TOLERANCE))
+        group_biomass["harvest_line_ft"]
+        <= group_biomass["available_line_ft"] * (1 + LINE_TOLERANCE)
+    )
 
     # add the state (region) per farm group
     farm_state = logs[["Farm Name", "State"]].dropna().drop_duplicates("Farm Name")
@@ -127,21 +151,24 @@ def build_events(path: str) -> pd.DataFrame:
     group_biomass["flag_region_ok"] = group_biomass["State"].isin(valid_states)
 
     # add observation events
-    outplant_ev = (outplant[GROUP + ["Log Date"]].assign(lbs_ft=0.0, event="outplant"))
-    sample_ev = (samples.dropna(subset=["Weight"])[GROUP + ["Log Date", "Weight"]]
-                .rename(columns={"Weight": "lbs_ft"})
-                .assign(event="sample", line_ft=1.0))
+    outplant_ev = outplant[GROUP + ["Log Date"]].assign(lbs_ft=0.0, event="outplant")
+    sample_ev = (
+        samples.dropna(subset=["Weight"])[GROUP + ["Log Date", "Weight"]]
+        .rename(columns={"Weight": "lbs_ft"})
+        .assign(event="sample", line_ft=1.0)
+    )
 
     sample_ev["weight_lbs"] = sample_ev["lbs_ft"]  # samples are per 1 ft
     harvest_ev = harvest.dropna(subset=["Weight", "Line Length"]).copy()
-    harvest_ev = harvest_ev[harvest_ev["Line Length"] > 0] # something had to be harvested
+    harvest_ev = harvest_ev[harvest_ev["Line Length"] > 0]  # something had to be harvested
     harvest_ev["lbs_ft"] = harvest_ev["Weight"] / harvest_ev["Line Length"]
     # keep the raw pieces: line_ft turns a lbs/ft forecast back into pounds,
     # weight_lbs is the per-event biomass ground truth
     harvest_ev["line_ft"] = harvest_ev["Line Length"]
     harvest_ev["weight_lbs"] = harvest_ev["Weight"]
-    harvest_ev = harvest_ev[GROUP + ["Log Date", "lbs_ft", "line_ft",
-                                     "weight_lbs"]].assign(event="harvest")
+    harvest_ev = harvest_ev[GROUP + ["Log Date", "lbs_ft", "line_ft", "weight_lbs"]].assign(
+        event="harvest"
+    )
     events = pd.concat([outplant_ev, sample_ev, harvest_ev], ignore_index=True)
     events["is_outplant"] = events["event"] == "outplant"
 
@@ -151,19 +178,23 @@ def build_events(path: str) -> pd.DataFrame:
     events["flag_model_species"] = events["Species"] == MODEL_SPECIES
     events["flag_has_outplant_date"] = events["seed_date"].notna()
 
-    for c in ["flag_single_outplant", "flag_has_harvest",
-              "flag_harvest_within_available", "flag_region_ok"]:
+    for c in [
+        "flag_single_outplant",
+        "flag_has_harvest",
+        "flag_harvest_within_available",
+        "flag_region_ok",
+    ]:
         events[c] = events[c].astype("boolean").fillna(False).astype(bool)
 
     events["day_of_season"] = events["Log Date"].apply(day_of_season)
-    events["flag_after_seed"] = events["is_outplant"] | (
-            events["Log Date"] > events["seed_date"])
+    events["flag_after_seed"] = events["is_outplant"] | (events["Log Date"] > events["seed_date"])
     events["farm_season_id"] = (
-            events["Farm Name"].str.replace("Farm_", "F") + "_"
-            + events["Season"].str.replace("Season ", "").str.replace("/", ""))
+        events["Farm Name"].str.replace("Farm_", "F")
+        + "_"
+        + events["Season"].str.replace("Season ", "").str.replace("/", "")
+    )
 
     return events
-
 
 
 def load_events(xlsx):
@@ -258,17 +289,18 @@ def season_obs(events, fsid, include_outplant=False):
     if not include_outplant:
         g = g[g["event"] != "outplant"]
 
-    obs = pd.DataFrame({
-        "day": g["day_of_season"].astype(float),
-        "y": g["lbs_ft"].astype(float),
-        "kind": np.where(g["event"] == "harvest", "harvest", "sample"),
-        "is_outplant": g["event"] == "outplant",
-        "line_ft": g["line_ft"].astype(float),
-        "weight_lbs": g["weight_lbs"].astype(float),
-    })
+    obs = pd.DataFrame(
+        {
+            "day": g["day_of_season"].astype(float),
+            "y": g["lbs_ft"].astype(float),
+            "kind": np.where(g["event"] == "harvest", "harvest", "sample"),
+            "is_outplant": g["event"] == "outplant",
+            "line_ft": g["line_ft"].astype(float),
+            "weight_lbs": g["weight_lbs"].astype(float),
+        }
+    )
 
     return obs.dropna(subset=["y"]).sort_values("day").reset_index(drop=True)
-
 
 
 def season_key(season):
@@ -323,11 +355,17 @@ def season_events(df, fsid):
         list[tuple]: `(day, lbs_ft, event, line_ft, weight_lbs)` sorted by day. Slice it to
             condition a fit on part of the season.
     """
-    g = df[(df[IDCOL] == fsid) & df[YCOL].notna()
-           & df["event"].isin([SAMPLE_EVENT, HARVEST_EVENT])]
-    ev = [(float(r[TCOL]), float(r[YCOL]), r["event"],
-           float(r.get("line_ft", np.nan)), float(r.get("weight_lbs", np.nan)))
-          for _, r in g.iterrows()]
+    g = df[(df[IDCOL] == fsid) & df[YCOL].notna() & df["event"].isin([SAMPLE_EVENT, HARVEST_EVENT])]
+    ev = [
+        (
+            float(r[TCOL]),
+            float(r[YCOL]),
+            r["event"],
+            float(r.get("line_ft", np.nan)),
+            float(r.get("weight_lbs", np.nan)),
+        )
+        for _, r in g.iterrows()
+    ]
 
     return sorted(ev, key=lambda e: e[0])
 
@@ -366,10 +404,9 @@ def data_fingerprint(seen):
     Returns:
         str: first 12 hex characters of the SHA-1 of `(day, lbs_ft, event)` per observation.
     """
-    payload = repr([(round(float(d), 6), round(float(v), 6), str(k))
-                    for d, v, k, *_ in seen])
+    payload = repr([(round(float(d), 6), round(float(v), 6), str(k)) for d, v, k, *_ in seen])
 
-    return hashlib.sha1(payload.encode()).hexdigest()[:12]
+    return hashlib.sha1(payload.encode(), usedforsecurity=False).hexdigest()[:12]
 
 
 def load_dataset(xlsx, filters=DEFAULT_FILTERS, verbose=True):
@@ -391,7 +428,7 @@ def load_dataset(xlsx, filters=DEFAULT_FILTERS, verbose=True):
             and farm-season counts, per-filter survivors, and an 8-char `fingerprint`.
     """
     path = Path(xlsx).expanduser()
-    file_hash = hashlib.sha1(path.read_bytes()).hexdigest()[:12]
+    file_hash = hashlib.sha1(path.read_bytes(), usedforsecurity=False).hexdigest()[:12]
     events = load_events(str(path))
     kept = {}
 
@@ -401,19 +438,26 @@ def load_dataset(xlsx, filters=DEFAULT_FILTERS, verbose=True):
             kept[f] = (len(events), events.groupby("farm_season_id").ngroups)
 
     events = events.reset_index(drop=True)
-    meta = {"source": str(path), "file_sha1": file_hash,
-            "filters": tuple(filters), "n_events": len(events),
-            "n_farm_seasons": events["farm_season_id"].nunique(),
-            "n_farms": events["Farm Name"].nunique(),
-            "seasons": sorted(events["Season"].unique()),
-            "after_each_filter": kept}
+    meta = {
+        "source": str(path),
+        "file_sha1": file_hash,
+        "filters": tuple(filters),
+        "n_events": len(events),
+        "n_farm_seasons": events["farm_season_id"].nunique(),
+        "n_farms": events["Farm Name"].nunique(),
+        "seasons": sorted(events["Season"].unique()),
+        "after_each_filter": kept,
+    }
 
     meta["fingerprint"] = hashlib.sha1(
-        repr((file_hash, tuple(filters), meta["n_events"])).encode()).hexdigest()[:8]
+        repr((file_hash, tuple(filters), meta["n_events"])).encode(), usedforsecurity=False
+    ).hexdigest()[:8]
 
     if verbose:
-        print(f"{meta['n_events']:,} events | {meta['n_farm_seasons']} farm-seasons | "
-              f"{meta['n_farms']} farms | {len(meta['seasons'])} seasons")
+        print(
+            f"{meta['n_events']:,} events | {meta['n_farm_seasons']} farm-seasons | "
+            f"{meta['n_farms']} farms | {len(meta['seasons'])} seasons"
+        )
         print(f"source {path.name} (sha1 {file_hash}) | data fingerprint {meta['fingerprint']}")
 
     return events, meta

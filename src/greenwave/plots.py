@@ -1,25 +1,32 @@
-"""
-Visualisation includes plots and tables.
-"""
+"""Visualisation includes plots and tables."""
+
 from __future__ import annotations
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-
 import pymc as pm
 from scipy.stats import gaussian_kde
 
-from .model import (C_PARAM, CURVES, LOG_SCALE_PARAMS, NU,
-                    harvest_scale, noise_rng, sample_prior)
 from .evaluate import REPORT_GROUPS, REPORT_VIEWS
-from .preprocess import (HARVEST_EVENT, IDCOL, OUTPLANT_EVENT, SAMPLE_EVENT,
-                         TCOL, YCOL, season_events)
+from .model import C_PARAM, CURVES, LOG_SCALE_PARAMS, NU, harvest_scale, noise_rng, sample_prior
+from .preprocess import (
+    HARVEST_EVENT,
+    IDCOL,
+    OUTPLANT_EVENT,
+    SAMPLE_EVENT,
+    TCOL,
+    YCOL,
+    season_events,
+)
 
-C_PRIOR = "#2a78d6"    # slot 1, blue   - the model
-C_FITS = "#eb6834"     # slot 2, orange - sample scale / fitted values
-C_ACTUAL = "#1baf7a"   # slot 3, aqua   - what actually happened
+C_PRIOR = "#2a78d6"  # slot 1, blue   - the model
+C_FITS = "#eb6834"  # slot 2, orange - sample scale / fitted values
+C_ACTUAL = "#1baf7a"  # slot 3, aqua   - what actually happened
 INK = "#0b0b0b"
+
+# table values at least this large are shown without decimals
+WHOLE_NUMBER_FROM = 1000
 INK_2 = "#52514e"
 MIN_SAMPLES = 3
 
@@ -83,17 +90,17 @@ def to_text(report, nd=2):
             continue
         if pd.api.types.is_float_dtype(t[c]):
             big = t[c].abs().max()
-            d = 0 if (pd.notna(big) and big >= 1000) else nd
+            d = 0 if (pd.notna(big) and big >= WHOLE_NUMBER_FROM) else nd
             out[c] = [("" if not np.isfinite(v) else f"{v:,.{d}f}") for v in t[c]]
         else:
             out[c] = t[c].astype(object).where(t[c].notna(), "")
 
     for lo, hi in pairs.items():
         big = t[[lo, hi]].abs().max().max()
-        d = 0 if (pd.notna(big) and big >= 1000) else nd
+        d = 0 if (pd.notna(big) and big >= WHOLE_NUMBER_FROM) else nd
         out[lo.replace("_lo95", "_95")] = [
-            "" if not np.isfinite(a) else f"[{a:,.{d}f} – {b:,.{d}f}]"
-            for a, b in zip(t[lo], t[hi])]
+            "" if not np.isfinite(a) else f"[{a:,.{d}f} – {b:,.{d}f}]" for a, b in zip(t[lo], t[hi])
+        ]
 
     return out
 
@@ -168,9 +175,17 @@ def add_harvest_pounds(report):
     return t
 
 
-def plot_season_curves(model, fsid, as_of=None, n_obs=None, estimator="median",
-                       t_max=None, show_sample_curve=True, savepath=None,
-                       ax=None):
+def plot_season_curves(
+    model,
+    fsid,
+    as_of=None,
+    n_obs=None,
+    estimator="median",
+    t_max=None,
+    show_sample_curve=True,
+    savepath=None,
+    ax=None,
+):
     """
     One posterior, drawn as curves across the whole season.
 
@@ -218,7 +233,8 @@ def plot_season_curves(model, fsid, as_of=None, n_obs=None, estimator="median",
     last = max(d for d, *_ in obs)
     grid = np.arange(0, (t_max or last + 25) + 1, 2.0)
     curves = harvest_scale(post, C_PARAM)[:, None] * f(
-        grid[None, :], post["A"][:, None], post["k"][:, None], post["t0"][:, None])
+        grid[None, :], post["A"][:, None], post["k"][:, None], post["t0"][:, None]
+    )
     lo, med, hi = np.quantile(curves, [0.025, 0.5, 0.975], axis=0)
     sig_h = np.asarray(post.get("sigma_h", np.nan), float)[:, None]
     rng = noise_rng(fsid, n_seen, "curveplot")
@@ -230,60 +246,102 @@ def plot_season_curves(model, fsid, as_of=None, n_obs=None, estimator="median",
     if ax is None:
         fig, ax = plt.subplots(figsize=(9.5, 4.6))
 
-    ax.fill_between(grid, plo, phi, color=C_PRIOR, alpha=0.10, lw=0,
-                    label="95% — any single cut")
-    ax.fill_between(grid, lo, hi, color=C_PRIOR, alpha=0.24, lw=0,
-                    label="95% — the farm's average that day")
+    ax.fill_between(grid, plo, phi, color=C_PRIOR, alpha=0.10, lw=0, label="95% — any single cut")
+    ax.fill_between(
+        grid, lo, hi, color=C_PRIOR, alpha=0.24, lw=0, label="95% — the farm's average that day"
+    )
     ax.plot(grid, med, color=C_PRIOR, lw=2, label="harvest forecast (median)")
 
     if show_sample_curve:
-        s_med = np.median(f(grid[None, :], post["A"][:, None], post["k"][:, None],
-                            post["t0"][:, None]), axis=0)
-        ax.plot(grid, s_med, color=C_FITS, lw=1.4, ls="--",
-                label="what a 1-ft sample would read (median)")
+        s_med = np.median(
+            f(grid[None, :], post["A"][:, None], post["k"][:, None], post["t0"][:, None]), axis=0
+        )
+        ax.plot(
+            grid,
+            s_med,
+            color=C_FITS,
+            lw=1.4,
+            ls="--",
+            label="what a 1-ft sample would read (median)",
+        )
 
-    op = model.events[(model.events[IDCOL] == fsid)
-                      & (model.events.event == OUTPLANT_EVENT)][TCOL].astype(float)
+    op = model.events[(model.events[IDCOL] == fsid) & (model.events.event == OUTPLANT_EVENT)][
+        TCOL
+    ].astype(float)
 
     if len(op):
-        ax.scatter(op, np.zeros(len(op)), marker="s", s=38, color="saddlebrown",
-                   zorder=4, label="outplant")
+        ax.scatter(
+            op, np.zeros(len(op)), marker="s", s=38, color="saddlebrown", zorder=4, label="outplant"
+        )
 
-    for kind, marker, col in [(SAMPLE_EVENT, "o", C_FITS),
-                              (HARVEST_EVENT, "*", c_actual)]:
+    for kind, marker, col in [(SAMPLE_EVENT, "o", C_FITS), (HARVEST_EVENT, "*", c_actual)]:
         d = np.array([e[0] for e in obs if e[2] == kind])
         v = np.array([e[1] for e in obs if e[2] == kind])
         if not len(d):
             continue
         seen = d <= cutoff
         ms = 110 if kind == HARVEST_EVENT else 34
-        ax.scatter(d[seen], v[seen], marker=marker, s=ms, color=col,
-                   edgecolor="white", linewidth=0.6, zorder=5,
-                   label=f"{kind} (conditioned on)")
+        ax.scatter(
+            d[seen],
+            v[seen],
+            marker=marker,
+            s=ms,
+            color=col,
+            edgecolor="white",
+            linewidth=0.6,
+            zorder=5,
+            label=f"{kind} (conditioned on)",
+        )
         if (~seen).any():
-            ax.scatter(d[~seen], v[~seen], marker=marker, s=ms, facecolor="none",
-                       edgecolor=col, linewidth=1.4, zorder=5,
-                       label=f"{kind} (NOT seen by this fit)")
+            ax.scatter(
+                d[~seen],
+                v[~seen],
+                marker=marker,
+                s=ms,
+                facecolor="none",
+                edgecolor=col,
+                linewidth=1.4,
+                zorder=5,
+                label=f"{kind} (NOT seen by this fit)",
+            )
 
     if n_seen:
         ax.axvline(cutoff, color=ink_2, ls=":", lw=1.2)
-        ax.text(cutoff, ax.get_ylim()[1] * 0.98, " conditioned up to here",
-                fontsize=8, color=ink_2, va="top")
+        ax.text(
+            cutoff,
+            ax.get_ylim()[1] * 0.98,
+            " conditioned up to here",
+            fontsize=8,
+            color=ink_2,
+            va="top",
+        )
 
     ymax = max(max(v for _, v, *_ in obs), float(np.nanmax(hi)))
     ax.set_ylim(0, 1.25 * ymax)
     ax.set_xlabel("day of season", color=ink_2)
     ax.set_ylabel("lbs/ft", color=INK)
-    ax.set_title(f"{meta['Farm Name']} {meta['Season']} — one posterior, "
-                 f"conditioned on {n_seen} of {len(obs)} observations "
-                 f"(through day {cutoff:.0f})", fontsize=10, color=INK, loc="left")
+    ax.set_title(
+        f"{meta['Farm Name']} {meta['Season']} — one posterior, "
+        f"conditioned on {n_seen} of {len(obs)} observations "
+        f"(through day {cutoff:.0f})",
+        fontsize=10,
+        color=INK,
+        loc="left",
+    )
 
     # the two bands answer different questions, and the labels alone do not
     # make that obvious -- so say it on the figure
-    ax.text(0, 1.015, "inner band: where the farm's average yield per foot sits."
-                      "   outer band: where any one cut can land, which is wider "
-                      "because individual stretches scatter around that average.",
-            transform=ax.transAxes, fontsize=7.5, color=ink_2, va="bottom")
+    ax.text(
+        0,
+        1.015,
+        "inner band: where the farm's average yield per foot sits."
+        "   outer band: where any one cut can land, which is wider "
+        "because individual stretches scatter around that average.",
+        transform=ax.transAxes,
+        fontsize=7.5,
+        color=ink_2,
+        va="bottom",
+    )
 
     ax.grid(alpha=0.22, lw=0.6)
     ax.set_axisbelow(True)
@@ -291,8 +349,7 @@ def plot_season_curves(model, fsid, as_of=None, n_obs=None, estimator="median",
     for side in ("top", "right"):
         ax.spines[side].set_visible(False)
 
-    ax.legend(fontsize=7.5, frameon=False, loc="center left",
-              bbox_to_anchor=(1.01, 0.5))
+    ax.legend(fontsize=7.5, frameon=False, loc="center left", bbox_to_anchor=(1.01, 0.5))
 
     if fig is not None:
         fig.tight_layout()
@@ -303,8 +360,18 @@ def plot_season_curves(model, fsid, as_of=None, n_obs=None, estimator="median",
     return fig, ax
 
 
-def plot_fit(df, cloud, fsid=None, farm=None, season=None, curve="logistic",
-             ax=None, legend=True, small=False, savepath=None):
+def plot_fit(
+    df,
+    cloud,
+    fsid=None,
+    farm=None,
+    season=None,
+    curve="logistic",
+    ax=None,
+    legend=True,
+    small=False,
+    savepath=None,
+):
     """
     One farm-season: its observations and its least-squares fitted curve.
 
@@ -339,12 +406,15 @@ def plot_fit(df, cloud, fsid=None, farm=None, season=None, curve="logistic",
             hit = hit[hit["season"] == season]
 
     if len(hit) == 0:
-        raise ValueError(f"no farm-season matched "
-                         f"(fsid={fsid!r}, farm={farm!r}, season={season!r})")
+        raise ValueError(
+            f"no farm-season matched " f"(fsid={fsid!r}, farm={farm!r}, season={season!r})"
+        )
 
     if len(hit) > 1:
-        raise ValueError(f"{len(hit)} farm-seasons matched; be more specific: "
-                         + ", ".join(hit[IDCOL].astype(str).head(6)))
+        raise ValueError(
+            f"{len(hit)} farm-seasons matched; be more specific: "
+            + ", ".join(hit[IDCOL].astype(str).head(6))
+        )
 
     row = hit.iloc[0]
     fsid = row[IDCOL]
@@ -362,44 +432,57 @@ def plot_fit(df, cloud, fsid=None, farm=None, season=None, curve="logistic",
     odays = sorted(o[TCOL].dropna().unique())
 
     if odays:
-        ax.scatter(odays, np.zeros(len(odays)), marker="s", s=45,
-                   color="tab:green", zorder=4, label="outplant")
+        ax.scatter(
+            odays,
+            np.zeros(len(odays)),
+            marker="s",
+            s=45,
+            color="tab:green",
+            zorder=4,
+            label="outplant",
+        )
 
-    ax.scatter(g[TCOL], g[YCOL], s=18, color="tab:blue", zorder=3,
-               label="samples")
+    ax.scatter(g[TCOL], g[YCOL], s=18, color="tab:blue", zorder=3, label="samples")
 
     if len(h):
-        ax.scatter(h[TCOL], h[YCOL], marker="*", s=120,
-                   color="tab:orange", zorder=4, label="harvest")
+        ax.scatter(
+            h[TCOL], h[YCOL], marker="*", s=120, color="tab:orange", zorder=4, label="harvest"
+        )
 
     # Extend the curve well past the last sample so extrapolated
     # plateaus (unidentified A) are visually obvious; start it early
     # enough to cover the first outplant.
     t_end = max(g[TCOL].max(), h[TCOL].max() if len(h) else 0) + 30
-    t_start = min(g[TCOL].min(),
-                  o[TCOL].min() if len(o) else g[TCOL].min(), 0)
+    t_start = min(g[TCOL].min(), o[TCOL].min() if len(o) else g[TCOL].min(), 0)
     tt = np.linspace(t_start, t_end, 200)
 
     if np.isfinite(row["A"]):
         yy = f(tt, row["A"], row["k"], row["t0"])
         ax.plot(tt, yy, color="tab:red", lw=1.5, zorder=2, label="fit")
-        ax.axhline(row["A"], color="tab:red", ls=":", lw=0.8, alpha=0.6,
-                   label="A (plateau)")
+        ax.axhline(row["A"], color="tab:red", ls=":", lw=0.8, alpha=0.6, label="A (plateau)")
         # Harvest-scale curve c*f(t): what the fit predicts a HARVEST
         # measurement would read — the stars should track this line.
         if np.isfinite(row.get("c", np.nan)):
-            ax.plot(tt, row["c"] * yy, color="tab:orange", lw=1.2,
-                    ls="--", zorder=2, label="c x fit (harvest scale)")
+            ax.plot(
+                tt,
+                row["c"] * yy,
+                color="tab:orange",
+                lw=1.2,
+                ls="--",
+                zorder=2,
+                label="c x fit (harvest scale)",
+            )
 
     tag = "" if row["quality"] == "ok" else "  ⚠"
-    c_txt = (f" c={row['c']:.2f}"
-             if np.isfinite(row.get("c", np.nan)) else "")
+    c_txt = f" c={row['c']:.2f}" if np.isfinite(row.get("c", np.nan)) else ""
     ts, ls = (8, 7) if small else (10, 9)
-    ax.set_title(f"{row['farm'][:18] if small else row['farm']} "
-                 f"{row['season']}{tag}\n"
-                 f"A={row['A']:.2f} k={row['k']:.3f} "
-                 f"t0={row['t0']:.0f}{c_txt} n={row['n_samples']}",
-                 fontsize=ts)
+    ax.set_title(
+        f"{row['farm'][:18] if small else row['farm']} "
+        f"{row['season']}{tag}\n"
+        f"A={row['A']:.2f} k={row['k']:.3f} "
+        f"t0={row['t0']:.0f}{c_txt} n={row['n_samples']}",
+        fontsize=ts,
+    )
 
     ax.set_xlabel("day of season", fontsize=ls)
     ax.set_ylabel(YCOL, fontsize=ls)
@@ -414,8 +497,7 @@ def plot_fit(df, cloud, fsid=None, farm=None, season=None, curve="logistic",
     return ax
 
 
-def plot_fits(df, cloud, curve="logistic", ncols=4, max_plots=None,
-              savepath=None):
+def plot_fits(df, cloud, curve="logistic", ncols=4, max_plots=None, savepath=None):
     """
     A grid of fitted curves, one panel per farm-season.
 
@@ -438,18 +520,15 @@ def plot_fits(df, cloud, curve="logistic", ncols=4, max_plots=None,
     plot_cloud = cloud if max_plots is None else cloud.head(max_plots)
     n = len(plot_cloud)
     nrows = int(np.ceil(n / ncols))
-    fig, axes = plt.subplots(nrows, ncols, figsize=(4 * ncols, 3 * nrows),
-                             squeeze=False)
+    fig, axes = plt.subplots(nrows, ncols, figsize=(4 * ncols, 3 * nrows), squeeze=False)
 
     for ax, (_, row) in zip(axes.flat, plot_cloud.iterrows()):
-        plot_fit(df, cloud, fsid=row[IDCOL], curve=curve, ax=ax,
-                 legend=False, small=True)
+        plot_fit(df, cloud, fsid=row[IDCOL], curve=curve, ax=ax, legend=False, small=True)
 
     for ax in axes.flat[n:]:
         ax.axis("off")
 
-    fig.suptitle(f"Per-season {curve} fits (sorted worst RMSE first; "
-                 f"⚠ = flagged)", y=1.001)
+    fig.suptitle(f"Per-season {curve} fits (sorted worst RMSE first; " f"⚠ = flagged)", y=1.001)
     fig.tight_layout()
 
     if savepath:
@@ -489,10 +568,10 @@ def plot_cloud(cloud, savepath=None):
     for ax, (x, y) in zip(np.atleast_1d(axes), pairs):
         ax.scatter(bad[x], bad[y], s=25, color="lightgray", label="flagged")
         ax.scatter(ok[x], ok[y], s=25, color="tab:blue", label="ok")
-        ax.set_xlabel(x); ax.set_ylabel(y)
+        ax.set_xlabel(x)
+        ax.set_ylabel(y)
         if x == "c":
-            ax.axvline(0.65, color="tab:orange", ls=":", lw=1,
-                       label="c=0.65" if y == "A" else None)
+            ax.axvline(0.65, color="tab:orange", ls=":", lw=1, label="c=0.65" if y == "A" else None)
 
     np.atleast_1d(axes)[0].legend(fontsize=8)
     fig.suptitle("Parameter cloud")
@@ -527,8 +606,7 @@ def plot_prior(define_priors, cloud=None, n=20000):
         logscale = p in LOG_SCALE_PARAMS and (v > 0).all()
         if logscale:
             grid = np.logspace(np.log10(v.min()), np.log10(v.max()), 300)
-            ax.plot(grid, gaussian_kde(np.log(v))(np.log(grid)),
-                    color="tab:purple", lw=2)
+            ax.plot(grid, gaussian_kde(np.log(v))(np.log(grid)), color="tab:purple", lw=2)
             ax.set_xscale("log")
         else:
             grid = np.linspace(v.min(), v.max(), 300)
@@ -541,7 +619,8 @@ def plot_prior(define_priors, cloud=None, n=20000):
 
     fig.suptitle("prior marginals", y=1.04)
     fig.tight_layout()
-    plt.show(); plt.close(fig)
+    plt.show()
+    plt.close(fig)
 
 
 def plot_prior_curves(define_priors, curve_name, n_curves=100, t_max=280):
@@ -569,10 +648,14 @@ def plot_prior_curves(define_priors, curve_name, n_curves=100, t_max=280):
         if np.isfinite(sc[i]):
             ax.plot(t, sc[i] * y, color="tab:orange", alpha=0.12, lw=1, ls="--")
 
-    ax.set_xlabel("day of season"); ax.set_ylabel("lbs_ft")
-    ax.set_title(f"{n_curves} seasons drawn from the prior\n"
-                 "(red = sample scale, dashed = harvest scale)")
-    fig.tight_layout(); plt.show(); plt.close(fig)
+    ax.set_xlabel("day of season")
+    ax.set_ylabel("lbs_ft")
+    ax.set_title(
+        f"{n_curves} seasons drawn from the prior\n" "(red = sample scale, dashed = harvest scale)"
+    )
+    fig.tight_layout()
+    plt.show()
+    plt.close(fig)
 
 
 def _build(define_priors):
@@ -622,8 +705,9 @@ def _prior_interval(rv, q=(0.025, 0.975), n=40000, seed=0):
     return tuple(np.quantile(d, q))
 
 
-def prior_coverage(define_priors, cloud, params=None, q=(0.025, 0.975),
-                   one_sided=("sigma", "sigma_h")):
+def prior_coverage(
+    define_priors, cloud, params=None, q=(0.025, 0.975), one_sided=("sigma", "sigma_h")
+):
     """
     Does each prior actually cover the historical fits?
 
@@ -645,32 +729,46 @@ def prior_coverage(define_priors, cloud, params=None, q=(0.025, 0.975),
     pri = _build(define_priors)
     rows = []
 
-    for p in (params or ["A", "k", "t0", "c", "sigma", "sigma_h"]):
+    for p in params or ["A", "k", "t0", "c", "sigma", "sigma_h"]:
         if p not in pri:
             continue
-        vals = (cloud[p].dropna().to_numpy()
-                if p in cloud.columns else np.array([]))
+        vals = cloud[p].dropna().to_numpy() if p in cloud.columns else np.array([])
         lo, hi = _prior_interval(pri[p], q)
         sided = p in one_sided
-        inside = (100 * np.mean(vals <= hi) if sided
-                  else 100 * np.mean((vals >= lo) & (vals <= hi))) \
-            if len(vals) else np.nan
-        rows.append(dict(
-            param=p, kind=pri[p].owner.op.name,
-            prior_lo=(0.0 if sided else lo), prior_hi=hi,
-            interval="one-sided" if sided else "central",
-            n_fits=len(vals),
-            fits_min=vals.min() if len(vals) else np.nan,
-            fits_med=np.median(vals) if len(vals) else np.nan,
-            fits_max=vals.max() if len(vals) else np.nan,
-            pct_inside=inside))
+        inside = (
+            (100 * np.mean(vals <= hi) if sided else 100 * np.mean((vals >= lo) & (vals <= hi)))
+            if len(vals)
+            else np.nan
+        )
+        rows.append(
+            {
+                "param": p,
+                "kind": pri[p].owner.op.name,
+                "prior_lo": (0.0 if sided else lo),
+                "prior_hi": hi,
+                "interval": "one-sided" if sided else "central",
+                "n_fits": len(vals),
+                "fits_min": vals.min() if len(vals) else np.nan,
+                "fits_med": np.median(vals) if len(vals) else np.nan,
+                "fits_max": vals.max() if len(vals) else np.nan,
+                "pct_inside": inside,
+            }
+        )
 
     return pd.DataFrame(rows)
 
 
-def plot_prior_marginals(define_priors, cloud=None, params=None, ncols=3,
-                         n_grid=500, q=(0.025, 0.975), window="prior",
-                         one_sided=("sigma", "sigma_h"), savepath=None):
+def plot_prior_marginals(
+    define_priors,
+    cloud=None,
+    params=None,
+    ncols=3,
+    n_grid=500,
+    q=(0.025, 0.975),
+    window="prior",
+    one_sided=("sigma", "sigma_h"),
+    savepath=None,
+):
     """
     One panel per parameter: the prior density against the historical fits.
 
@@ -696,18 +794,15 @@ def plot_prior_marginals(define_priors, cloud=None, params=None, ncols=3,
         raise ValueError(f"window must be 'prior' or 'all', got {window!r}")
 
     pri = _build(define_priors)
-    params = params or [p for p in ("A", "k", "t0", "c", "sigma", "sigma_h")
-                        if p in pri]
-    ok = cloud # keep fits of all qualities 
+    params = params or [p for p in ("A", "k", "t0", "c", "sigma", "sigma_h") if p in pri]
+    ok = cloud  # keep fits of all qualities
     nrows = int(np.ceil(len(params) / ncols))
-    fig, axes = plt.subplots(nrows, ncols, figsize=(4.3 * ncols, 3.1 * nrows),
-                             squeeze=False)
+    fig, axes = plt.subplots(nrows, ncols, figsize=(4.3 * ncols, 3.1 * nrows), squeeze=False)
 
     for ax, p in zip(axes.flat, params):
         rv = pri[p]
         lo, hi = _prior_interval(rv, q)
-        vals = (ok[p].dropna().to_numpy()
-                if ok is not None and p in ok.columns else np.array([]))
+        vals = ok[p].dropna().to_numpy() if ok is not None and p in ok.columns else np.array([])
         logx = p in LOG_SCALE_PARAMS and np.isfinite(lo) and lo > 0
 
         shown = vals[vals > 0] if logx else vals
@@ -717,18 +812,19 @@ def plot_prior_marginals(define_priors, cloud=None, params=None, ncols=3,
         if np.isfinite(lo) and np.isfinite(hi):
             if logx:
                 w = np.log10(hi) - np.log10(lo)
-                span += [10 ** (np.log10(lo) - 0.5 * w),
-                         10 ** (np.log10(hi) + 0.5 * w)]
+                span += [10 ** (np.log10(lo) - 0.5 * w), 10 ** (np.log10(hi) + 0.5 * w)]
             else:
                 w = hi - lo
                 span += [lo - 0.5 * w, hi + 0.5 * w]
         if len(shown):
-            span += ([shown.min(), shown.max()] if window == "all" else
-                     [np.quantile(shown, 0.25), np.quantile(shown, 0.75)])
+            span += (
+                [shown.min(), shown.max()]
+                if window == "all"
+                else [np.quantile(shown, 0.25), np.quantile(shown, 0.75)]
+            )
         x_lo, x_hi = min(span), max(span)
         if logx:
-            grid = np.logspace(np.log10(max(x_lo, 1e-300)),
-                               np.log10(x_hi), n_grid)
+            grid = np.logspace(np.log10(max(x_lo, 1e-300)), np.log10(x_hi), n_grid)
         else:
             pad = 0.04 * ((x_hi - x_lo) or 1.0)
             grid = np.linspace(x_lo - pad, x_hi + pad, n_grid)
@@ -739,21 +835,35 @@ def plot_prior_marginals(define_priors, cloud=None, params=None, ncols=3,
         n_off = len(shown) - len(inwin) + n_nonpos
         heights, centers = np.array([]), np.array([])
         if len(inwin):
-            bins = (np.logspace(np.log10(grid[0]), np.log10(grid[-1]), 24)
-                    if logx else np.linspace(grid[0], grid[-1], 24))
-            heights, _, _ = ax.hist(inwin, bins=bins, density=True,
-                                    color=C_FITS, alpha=0.30, edgecolor="none",
-                                    label="historical fits", zorder=2)
-            centers = (np.sqrt(bins[:-1] * bins[1:]) if logx
-                       else 0.5 * (bins[:-1] + bins[1:]))
+            bins = (
+                np.logspace(np.log10(grid[0]), np.log10(grid[-1]), 24)
+                if logx
+                else np.linspace(grid[0], grid[-1], 24)
+            )
+            heights, _, _ = ax.hist(
+                inwin,
+                bins=bins,
+                density=True,
+                color=C_FITS,
+                alpha=0.30,
+                edgecolor="none",
+                label="historical fits",
+                zorder=2,
+            )
+            centers = np.sqrt(bins[:-1] * bins[1:]) if logx else 0.5 * (bins[:-1] + bins[1:])
             # rug: exact values, since 24 bins hide where the tails really sit
-            ax.plot(inwin, np.zeros(len(inwin)), "|", ms=9, color=C_FITS,
-                    alpha=0.85, zorder=4)
+            ax.plot(inwin, np.zeros(len(inwin)), "|", ms=9, color=C_FITS, alpha=0.85, zorder=4)
 
-        band = ((grid <= hi) if p in one_sided
-                else ((grid >= lo) & (grid <= hi)))
-        ax.fill_between(grid[band], 0, dens[band], color=C_PRIOR, alpha=0.13,
-                        zorder=1, label=f"prior central {100*(q[1]-q[0]):.0f}%")
+        band = (grid <= hi) if p in one_sided else ((grid >= lo) & (grid <= hi))
+        ax.fill_between(
+            grid[band],
+            0,
+            dens[band],
+            color=C_PRIOR,
+            alpha=0.13,
+            zorder=1,
+            label=f"prior central {100*(q[1]-q[0]):.0f}%",
+        )
         ax.plot(grid, dens, color=C_PRIOR, lw=2, zorder=3, label="prior")
 
         if logx:
@@ -763,28 +873,37 @@ def plot_prior_marginals(define_priors, cloud=None, params=None, ncols=3,
         n_clip = 0
         if window == "all" and len(heights):
             inband = heights[(centers >= lo) & (centers <= hi)]
-            y_top = 1.30 * max(np.nanmax(dens),
-                               inband.max() if len(inband) else 0.0)
+            y_top = 1.30 * max(np.nanmax(dens), inband.max() if len(inband) else 0.0)
             n_clip = int((heights > y_top).sum())
             ax.set_ylim(0, y_top)
         else:
             ax.set_ylim(bottom=0)
 
         sided = p in one_sided
-        inside = (100 * np.mean(vals <= hi) if sided
-                  else 100 * np.mean((vals >= lo) & (vals <= hi))) \
-            if len(vals) else np.nan
-        ax.set_title(f"{p}  ({rv.owner.op.name})", fontsize=10,
-                     color=INK, loc="left")
-        rng = ((f"prior {100*q[1]:.0f}th pct: {hi:.3g}" if sided else
-                f"prior {100*(q[1]-q[0]):.0f}%: {lo:.3g} – {hi:.3g}")
-               + (f"\nfits: {vals.min():.3g} – {vals.max():.3g}"
-                  f"\n{inside:.0f}% of {len(vals)} fits inside"
-                  if len(vals) else "\n(no fitted values)")
-               + (f"\n{n_off} off-scale" if n_off else "")
-               + (f"\n{n_clip} bars clipped" if n_clip else ""))
-        ax.text(0.97, 0.94, rng, transform=ax.transAxes, ha="right", va="top",
-                fontsize=8, color=INK_2)
+        inside = (
+            (100 * np.mean(vals <= hi) if sided else 100 * np.mean((vals >= lo) & (vals <= hi)))
+            if len(vals)
+            else np.nan
+        )
+        ax.set_title(f"{p}  ({rv.owner.op.name})", fontsize=10, color=INK, loc="left")
+        rng = (
+            (
+                f"prior {100*q[1]:.0f}th pct: {hi:.3g}"
+                if sided
+                else f"prior {100*(q[1]-q[0]):.0f}%: {lo:.3g} – {hi:.3g}"
+            )
+            + (
+                f"\nfits: {vals.min():.3g} – {vals.max():.3g}"
+                f"\n{inside:.0f}% of {len(vals)} fits inside"
+                if len(vals)
+                else "\n(no fitted values)"
+            )
+            + (f"\n{n_off} off-scale" if n_off else "")
+            + (f"\n{n_clip} bars clipped" if n_clip else "")
+        )
+        ax.text(
+            0.97, 0.94, rng, transform=ax.transAxes, ha="right", va="top", fontsize=8, color=INK_2
+        )
         ax.set_ylabel("density", fontsize=8, color=INK_2)
         ax.tick_params(labelsize=8, colors=INK_2)
         ax.grid(axis="y", color="#e6e5e1", lw=0.7)
@@ -794,13 +913,20 @@ def plot_prior_marginals(define_priors, cloud=None, params=None, ncols=3,
         for side in ("left", "bottom"):
             ax.spines[side].set_color("#d8d7d2")
 
-    for ax in axes.flat[len(params):]:
+    for ax in axes.flat[len(params) :]:
         ax.axis("off")
 
     handles, labels = axes.flat[0].get_legend_handles_labels()
-    fig.legend(handles, labels, loc="lower center", ncol=len(labels),
-               frameon=False, fontsize=9, labelcolor=INK_2,
-               bbox_to_anchor=(0.5, -0.02))
+    fig.legend(
+        handles,
+        labels,
+        loc="lower center",
+        ncol=len(labels),
+        frameon=False,
+        fontsize=9,
+        labelcolor=INK_2,
+        bbox_to_anchor=(0.5, -0.02),
+    )
 
     fig.suptitle("Prior marginals vs historical fits", fontsize=11, color=INK)
     fig.tight_layout()
@@ -808,6 +934,5 @@ def plot_prior_marginals(define_priors, cloud=None, params=None, ncols=3,
     if savepath:
         fig.savefig(savepath, dpi=150, bbox_inches="tight")
 
-    plt.show(); plt.close(fig)
-
-
+    plt.show()
+    plt.close(fig)

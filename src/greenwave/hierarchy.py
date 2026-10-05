@@ -1,6 +1,5 @@
-"""
-The hierarchical (partially pooled) prior: learn from earlier seasons.
-"""
+"""The hierarchical (partially pooled) prior: learn from earlier seasons."""
+
 from __future__ import annotations
 
 import pickle
@@ -13,23 +12,30 @@ import pymc as pm
 import pytensor.tensor as pt
 
 from . import preprocess as pre
-from .model import (BROAD_PRIOR, NU, Prior, broad_prior_fingerprint,
-                    logistic, make_prior_for_season)
+from .model import (
+    BROAD_PRIOR,
+    ESS_MIN,
+    NU,
+    RHAT_OK,
+    Prior,
+    broad_prior_fingerprint,
+    logistic,
+    make_prior_for_season,
+)
 
-#the hierarchy's parameters, on the scale it works in
+# the hierarchy's parameters, on the scale it works in
 ORDER = ["logA", "logk", "t0", "logc", "logsh"]
 
 #: which hierarchy parameter comes from which entry of the broad prior
 _FROM_BROAD_PRIOR = {"logA": "A", "logk": "k", "t0": "t0", "logc": "c", "logsh": "sigma_h"}
 
 #: which levels each parameter varies by
-CONFIG = {"logA": ["state"], "logk": ["state"], "t0": ["state"],
-          "logc": ["farm"], "logsh": []}
+CONFIG = {"logA": ["state"], "logk": ["state"], "t0": ["state"], "logc": ["farm"], "logsh": []}
 
 MIN_FARMS_PER_REGION = 3
 # how much of the broad prior's spread to allow BETWEEN levels
 LEVEL_SD_FRACTION = 0.75
-STAGE1_MCMC = dict(draws=1000, tune=1000, chains=4, cores=1, target_accept=0.95)
+STAGE1_MCMC = {"draws": 1000, "tune": 1000, "chains": 4, "cores": 1, "target_accept": 0.95}
 #: stage-1 variables to keep when caching the stage 1 posteriors
 _KEEP_PREFIXES = ("mu_", "sd_", "z_state_", "z_farm_")
 
@@ -90,9 +96,9 @@ def groups(hist, min_farms_per_region=MIN_FARMS_PER_REGION):
         tuple: `(fs, farms, states)` -- one row per historical farm-season in the order the fit
             indexes by, and the sorted level labels.
     """
-    fs = (hist.drop_duplicates("farm_season_id")
-              [["farm_season_id", "Farm Name", "State", "Season"]]
-              .reset_index(drop=True))
+    fs = hist.drop_duplicates("farm_season_id")[
+        ["farm_season_id", "Farm Name", "State", "Season"]
+    ].reset_index(drop=True)
 
     farms = sorted(fs["Farm Name"].unique())
     n_farms = fs.groupby("State")["Farm Name"].nunique()
@@ -101,9 +107,15 @@ def groups(hist, min_farms_per_region=MIN_FARMS_PER_REGION):
     return fs, farms, states
 
 
-def fit_hierarchy(hist, config=None, mcmc=None, broad_prior=None, seed=0,
-                  min_farms_per_region=MIN_FARMS_PER_REGION,
-                  level_sd_fraction=LEVEL_SD_FRACTION):
+def fit_hierarchy(
+    hist,
+    config=None,
+    mcmc=None,
+    broad_prior=None,
+    seed=0,
+    min_farms_per_region=MIN_FARMS_PER_REGION,
+    level_sd_fraction=LEVEL_SD_FRACTION,
+):
     """
     Stage 1: one joint fit over all the farm-seasons in `hist`.
 
@@ -137,11 +149,17 @@ def fit_hierarchy(hist, config=None, mcmc=None, broad_prior=None, seed=0,
     center, spread = hyperprior(broad_prior)
     level_sd = {p: level_sd_fraction * spread[p] for p in ORDER}
     fs, farms, states = groups(hist, min_farms_per_region)
-    farm_idx = fs["Farm Name"].map({f: i for i, f in enumerate(farms)}).values
-    state_idx = (fs["State"].map({s: i for i, s in enumerate(states)})
-                 .fillna(len(states)).astype(int).values)
-    obs = pd.concat([pre.season_obs(hist, f).assign(fs=i)
-                     for i, f in enumerate(fs["farm_season_id"])])
+    farm_idx = fs["Farm Name"].map({f: i for i, f in enumerate(farms)}).to_numpy()
+    state_idx = (
+        fs["State"]
+        .map({s: i for i, s in enumerate(states)})
+        .fillna(len(states))
+        .astype(int)
+        .to_numpy()
+    )
+    obs = pd.concat(
+        [pre.season_obs(hist, f).assign(fs=i) for i, f in enumerate(fs["farm_season_id"])]
+    )
     s, h = obs[obs.kind == "sample"], obs[obs.kind == "harvest"]
     m = {**STAGE1_MCMC, **(mcmc or {})}
 
@@ -168,21 +186,46 @@ def fit_hierarchy(hist, config=None, mcmc=None, broad_prior=None, seed=0,
         t0, c = theta["t0"], pt.exp(theta["logc"])
         sigma_h = pt.exp(theta["logsh"])
         sigma = pm.LogNormal("sigma", *sigma_prior(broad_prior))
-        i, j = s["fs"].values, h["fs"].values
-        pm.StudentT("y_s", nu=NU, sigma=sigma, observed=s["y"].values,
-                    mu=logistic(s["day"].values, A[i], k[i], t0[i], m=pm.math))
-        pm.StudentT("y_h", nu=NU, sigma=sigma_h[j], observed=h["y"].values,
-                    mu=c[j] * logistic(h["day"].values, A[j], k[j], t0[j], m=pm.math))
-        idata = pm.sample(draws=m["draws"], tune=m["tune"], chains=m["chains"],
-                          cores=m["cores"], target_accept=m["target_accept"],
-                          random_seed=seed, progressbar=False,
-                          compute_convergence_checks=False)
+        i, j = s["fs"].to_numpy(), h["fs"].to_numpy()
+        pm.StudentT(
+            "y_s",
+            nu=NU,
+            sigma=sigma,
+            observed=s["y"].values,
+            mu=logistic(s["day"].values, A[i], k[i], t0[i], m=pm.math),
+        )
+        pm.StudentT(
+            "y_h",
+            nu=NU,
+            sigma=sigma_h[j],
+            observed=h["y"].values,
+            mu=c[j] * logistic(h["day"].values, A[j], k[j], t0[j], m=pm.math),
+        )
+        idata = pm.sample(
+            draws=m["draws"],
+            tune=m["tune"],
+            chains=m["chains"],
+            cores=m["cores"],
+            target_accept=m["target_accept"],
+            random_seed=seed,
+            progressbar=False,
+            compute_convergence_checks=False,
+        )
 
     return idata, (fs, farms, states)
 
 
-def run_stage1(events, season, cache_dir, run_prefix="H_kelp", mcmc=None,
-               config=None, broad_prior=None, seed=0, refit=False):
+def run_stage1(
+    events,
+    season,
+    cache_dir,
+    run_prefix="H_kelp",
+    mcmc=None,
+    config=None,
+    broad_prior=None,
+    seed=0,
+    refit=False,
+):
     """
     Stage 1 for one target season, cached to disk.
 
@@ -214,21 +257,28 @@ def run_stage1(events, season, cache_dir, run_prefix="H_kelp", mcmc=None,
     path = Path(cache_dir) / f"stage1_{run_prefix}_{tag}_{season[-5:].replace('/', '')}.pkl"
 
     if path.exists() and not refit:
-        with open(path, "rb") as fh:
-            return pickle.load(fh)
+        with path.open("rb") as fh:
+            return pickle.load(fh)  # noqa: S301 -- the project's own cache file
 
-    idata, g = fit_hierarchy(pre.history(events, season), config=config,
-                             mcmc=mcmc, broad_prior=broad_prior, seed=seed)
-    post = {v: idata.posterior[v].values.reshape(-1, *idata.posterior[v].shape[2:])
-            for v in idata.posterior.data_vars if v.startswith(_KEEP_PREFIXES)}
+    idata, g = fit_hierarchy(
+        pre.history(events, season), config=config, mcmc=mcmc, broad_prior=broad_prior, seed=seed
+    )
+    post = {
+        v: idata.posterior[v].to_numpy().reshape(-1, *idata.posterior[v].shape[2:])
+        for v in idata.posterior.data_vars
+        if v.startswith(_KEEP_PREFIXES)
+    }
     hyper = [v for v in idata.posterior.data_vars if v.startswith(("mu_", "sd_"))]
-    out = {"post": post, "groups": g,
-           "summary": az.summary(idata, var_names=hyper + ["sigma"], kind="all"),
-           "divergences": int(idata.sample_stats.diverging.values.sum())}
+    out = {
+        "post": post,
+        "groups": g,
+        "summary": az.summary(idata, var_names=hyper + ["sigma"], kind="all"),
+        "divergences": int(idata.sample_stats.diverging.to_numpy().sum()),
+    }
 
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    with open(path, "wb") as fh:
+    with path.open("wb") as fh:
         pickle.dump(out, fh)
 
     return out
@@ -256,16 +306,20 @@ def stage1_health(stage1):
 
     for season, fit in stage1.items():
         s = fit["summary"]
-        bad = s[(s.r_hat > 1.01) | (s.ess_bulk < 400)]
-        rows.append({"season": season, "history_farm_seasons": len(fit["groups"][0]),
-                     "farms": len(fit["groups"][1]),
-                     "states": ", ".join(fit["groups"][2]),
-                     "max_rhat": float(s["r_hat"].max()),
-                     "min_ess_bulk": float(s["ess_bulk"].min()),
-                     "divergences": fit["divergences"],
-                     "params_flagged": int(len(bad)),
-                     "worst": ", ".join(bad.sort_values("r_hat", ascending=False)
-                                        .index[:3])})
+        bad = s[(s.r_hat > RHAT_OK) | (s.ess_bulk < ESS_MIN)]
+        rows.append(
+            {
+                "season": season,
+                "history_farm_seasons": len(fit["groups"][0]),
+                "farms": len(fit["groups"][1]),
+                "states": ", ".join(fit["groups"][2]),
+                "max_rhat": float(s["r_hat"].max()),
+                "min_ess_bulk": float(s["ess_bulk"].min()),
+                "divergences": fit["divergences"],
+                "params_flagged": int(len(bad)),
+                "worst": ", ".join(bad.sort_values("r_hat", ascending=False).index[:3]),
+            }
+        )
 
     return pd.DataFrame(rows).set_index("season")
 
@@ -296,7 +350,7 @@ def new_season_draws(stage1_fit, farm, state, config=None, seed=0):
         pd.DataFrame: one column per name in `ORDER`, one row per stage-1 draw.
     """
     config = CONFIG if config is None else config
-    post, (fs, farms, states) = stage1_fit["post"], stage1_fit["groups"]
+    post, (_, farms, states) = stage1_fit["post"], stage1_fit["groups"]
     rng = np.random.default_rng(seed)
     n = len(post["mu_logA"])
     out = {}
@@ -306,8 +360,11 @@ def new_season_draws(stage1_fit, farm, state, config=None, seed=0):
         if "state" in config[p] and state in states:
             v = v + post[f"sd_state_{p}"] * post[f"z_state_{p}"][:, states.index(state)]
         if "farm" in config[p]:
-            z = (post[f"z_farm_{p}"][:, farms.index(farm)] if farm in farms
-                 else rng.standard_normal(n))
+            z = (
+                post[f"z_farm_{p}"][:, farms.index(farm)]
+                if farm in farms
+                else rng.standard_normal(n)
+            )
             v = v + post[f"sd_farm_{p}"] * z
         v = v + post[f"sd_season_{p}"] * rng.standard_normal(n)
         out[p] = v
@@ -335,8 +392,8 @@ def mvn_prior(draws, broad_prior=None):
         tuple: `(add_prior, mean, cov)`. `add_prior(dims=None)` must be called inside a `pm.Model`.
             `mean` and `cov` are what the cache fingerprint is built from.
     """
-    mean = draws[ORDER].mean().values
-    cov = np.cov(draws[ORDER].values.T)
+    mean = draws[ORDER].mean().to_numpy()
+    cov = np.cov(draws[ORDER].to_numpy().T)
 
     def add_prior(dims=None):
         """
@@ -351,18 +408,21 @@ def mvn_prior(draws, broad_prior=None):
         """
         th = pm.MvNormal("theta", mu=mean, cov=cov)
 
-        return {"A": pm.Deterministic("A", pt.exp(th[0])),
-                "k": pm.Deterministic("k", pt.exp(th[1])),
-                "t0": pm.Deterministic("t0", th[2]),
-                "c": pm.Deterministic("c", pt.exp(th[3])),
-                "sigma_h": pm.Deterministic("sigma_h", pt.exp(th[4])),
-                "sigma": pm.LogNormal("sigma", *sigma_prior(broad_prior))}
+        return {
+            "A": pm.Deterministic("A", pt.exp(th[0])),
+            "k": pm.Deterministic("k", pt.exp(th[1])),
+            "t0": pm.Deterministic("t0", th[2]),
+            "c": pm.Deterministic("c", pt.exp(th[3])),
+            "sigma_h": pm.Deterministic("sigma_h", pt.exp(th[4])),
+            "sigma": pm.LogNormal("sigma", *sigma_prior(broad_prior)),
+        }
 
     return add_prior, mean, cov
 
 
-def hierarchical_prior_for(events, stage1, run_name="hierarchy", config=None,
-                           broad_prior=None, seed=0):
+def hierarchical_prior_for(
+    events, stage1, run_name="hierarchy", config=None, broad_prior=None, seed=0
+):
     """
     Build `prior_for(fsid) -> model.Prior`, the shape every report function takes.
 
@@ -419,16 +479,18 @@ def hierarchical_prior_for(events, stage1, run_name="hierarchy", config=None,
                 Returns:
                     dict: `param -> RV`. Must be called inside a `pm.Model`.
                 """
-                return make_prior_for_season(None, None, None, dims=dims,
-                                             broad_prior=prior_def)
+                return make_prior_for_season(None, None, None, dims=dims, broad_prior=prior_def)
+
             return broad, "population (domain ranges)", broad_prior_fingerprint(prior_def)
 
-        draws = new_season_draws(stage1[m["Season"]], m["Farm Name"], m["State"],
-                                 config=config, seed=seed)
+        draws = new_season_draws(
+            stage1[m["Season"]], m["Farm Name"], m["State"], config=config, seed=seed
+        )
         add_prior, mean, cov = mvn_prior(draws, prior_def)
         # fingerprint the FITTED definition, not samples from it
-        fp = broad_prior_fingerprint({p: ("normal", mean[i], float(np.sqrt(cov[i, i])))
-                                      for i, p in enumerate(ORDER)})
+        fp = broad_prior_fingerprint(
+            {p: ("normal", mean[i], float(np.sqrt(cov[i, i]))) for i, p in enumerate(ORDER)}
+        )
 
         return add_prior, f"{run_name} ({m['Farm Name']}, {m['State']})", fp
 
@@ -445,17 +507,24 @@ def hierarchical_prior_for(events, stage1, run_name="hierarchy", config=None,
         if fsid not in memo:
             m = meta_by_fsid.loc[fsid]
             build, source, fp = build_for(fsid)
-            memo[fsid] = Prior(build, {"method": "hierarchy", "source": source,
-                                       "fingerprint": fp, "farm": m["Farm Name"],
-                                       "season": m["Season"], "state": m["State"]})
+            memo[fsid] = Prior(
+                build,
+                {
+                    "method": "hierarchy",
+                    "source": source,
+                    "fingerprint": fp,
+                    "farm": m["Farm Name"],
+                    "season": m["Season"],
+                    "state": m["State"],
+                },
+            )
 
         return memo[fsid]
 
     return get
 
 
-def prior_for(events, stage1, run_name="hierarchy", config=None,
-              broad_prior=None, seed=0):
+def prior_for(events, stage1, run_name="hierarchy", config=None, broad_prior=None, seed=0):
     """
     Deprecated alias for `hierarchical_prior_for`.
 
@@ -473,6 +542,6 @@ def prior_for(events, stage1, run_name="hierarchy", config=None,
     Returns:
         callable: whatever `hierarchical_prior_for` returns.
     """
-    return hierarchical_prior_for(events, stage1, run_name=run_name,
-                                  config=config, broad_prior=broad_prior,
-                                  seed=seed)
+    return hierarchical_prior_for(
+        events, stage1, run_name=run_name, config=config, broad_prior=broad_prior, seed=seed
+    )

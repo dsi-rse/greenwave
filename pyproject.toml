@@ -37,13 +37,14 @@ where = ["src"]
 
 [tool.ruff]
 line-length = 100
+# notebooks are exploratory and are not held to the lint or format rules
+extend-exclude = ["*.ipynb"]
 
 [tool.ruff.lint]
 extend-select = [
   # by default, ruff enables all F and a subset of E rules
   # for a description of rulesets and examples, see:
   # https://docs.astral.sh/ruff/rules/
-  "ANN",    # flake8-annotations - type annotations, some ignored
   "B",      # bugbear - identifies likely bugs
   "C4",     # flake8-comprehensions - identifies redundant calls in comprehensions
   "D",      # pydocstyle - requires docstrings on all public modules/functions/classes
