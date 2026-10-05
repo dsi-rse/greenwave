@@ -22,11 +22,10 @@ logs["Log Date"] = pd.to_datetime(logs["Log Date"])
 
 
 def extract_line_numbers(note):
+    """Pull line numbers out of free-text Notes (e.g. 'line 3 and 5')."""
     found = []
     if isinstance(note, str):
-        for match in re.finditer(
-            r"\blines?\b[\s:=>/]*([\d,\s&]+(?:and[\s\d,&]+)*)", note.lower()
-        ):
+        for match in re.finditer(r"\blines?\b[\s:=>/]*([\d,\s&]+(?:and[\s\d,&]+)*)", note.lower()):
             for c in re.findall(r"\d+", match.group(1)):
                 num = int(c)
                 if num not in found:
@@ -40,6 +39,7 @@ logs["n_lines"] = logs["line_numbers"].apply(len)
 
 
 def line_key(row):
+    """Label a log row by its line: one number, several ("multi: ..."), or "unspecified"."""
     if row["n_lines"] == 0:
         return "unspecified"
     if row["n_lines"] == 1:
@@ -80,6 +80,7 @@ def panel_tags(n_samples, n_harvests, line_str, samples_df, harvests_df):
 
 
 def make_farm_season_figure(farm, season):
+    """One farm-season's figure, a panel per (species, line), and the tags of its panels."""
     g = sh[(sh["Anon Farm"] == farm) & (sh["Season"] == season)]
     if g.empty:
         return None, []
@@ -107,14 +108,15 @@ def make_farm_season_figure(farm, season):
     # the rotated date tick labels are taller than they look (60-70px), and the
     # row above also has an "Date" axis title (~20px below that). Add the row
     # below's 2-line subplot title (~35px) plus breathing room (~25px).
-    GAP_PX = 150                                 # pixels of vertical gap per row boundary
-    PLOT_PX_PER_ROW = 320                        # plot area per row
+    GAP_PX = 150  # pixels of vertical gap per row boundary
+    PLOT_PX_PER_ROW = 320  # plot area per row
     plot_height_px = rows * PLOT_PX_PER_ROW + max(rows - 1, 0) * GAP_PX
     v_space = (GAP_PX / plot_height_px) if rows > 1 else 0.1
     # plotly hard-caps vertical_spacing at 1/(rows-1)
     v_space = min(v_space, 1 / max(rows - 1, 1) - 0.01) if rows > 1 else v_space
     fig = make_subplots(
-        rows=rows, cols=cols,
+        rows=rows,
+        cols=cols,
         subplot_titles=subplot_titles,
         vertical_spacing=v_space,
         horizontal_spacing=0.08,
@@ -144,9 +146,13 @@ def make_farm_season_figure(farm, season):
                     name="Samples",
                     legendgroup="samples",
                     showlegend=not sample_legend_shown,
-                    marker=dict(color=COLOR_SAMPLE, size=8, opacity=0.55,
-                                line=dict(color="white", width=0.6)),
-                    customdata=notes_text.values.reshape(-1, 1),
+                    marker={
+                        "color": COLOR_SAMPLE,
+                        "size": 8,
+                        "opacity": 0.55,
+                        "line": {"color": "white", "width": 0.6},
+                    },
+                    customdata=notes_text.to_numpy().reshape(-1, 1),
                     hovertemplate=(
                         "<b>Sample</b><br>"
                         "Date: %{x|%Y-%m-%d}<br>"
@@ -155,12 +161,13 @@ def make_farm_season_figure(farm, season):
                         "<extra></extra>"
                     ),
                 ),
-                row=r, col=c,
+                row=r,
+                col=c,
             )
             sample_legend_shown = True
 
         # Daily-averaged line (only if ≥2 unique days)
-        if len(samples) >= 2:
+        if len(samples) >= 2:  # noqa: PLR2004 -- a line needs two points
             tmp = samples.copy()
             tmp["date_only"] = tmp["Log Date"].dt.date
             daily = (
@@ -169,7 +176,7 @@ def make_farm_season_figure(farm, season):
                 .reset_index()
             )
             daily["date"] = pd.to_datetime(daily["date_only"])
-            if len(daily) >= 2:
+            if len(daily) >= 2:  # noqa: PLR2004 -- a line needs two points
                 fig.add_trace(
                     go.Scatter(
                         x=daily["date"],
@@ -178,8 +185,8 @@ def make_farm_season_figure(farm, season):
                         name="Daily-average sample",
                         legendgroup="daily",
                         showlegend=not daily_legend_shown,
-                        line=dict(color=COLOR_DAILY, width=2),
-                        marker=dict(color=COLOR_DAILY, size=5),
+                        line={"color": COLOR_DAILY, "width": 2},
+                        marker={"color": COLOR_DAILY, "size": 5},
                         customdata=daily[["n"]].values,
                         hovertemplate=(
                             "<b>Daily average</b><br>"
@@ -189,7 +196,8 @@ def make_farm_season_figure(farm, season):
                             "<extra></extra>"
                         ),
                     ),
-                    row=r, col=c,
+                    row=r,
+                    col=c,
                 )
                 daily_legend_shown = True
 
@@ -222,10 +230,12 @@ def make_farm_season_figure(farm, season):
                         name="Harvest (yield)",
                         legendgroup="harvest",
                         showlegend=not harvest_legend_shown,
-                        marker=dict(
-                            color=COLOR_HARVEST, size=13, symbol="square",
-                            line=dict(color="white", width=1),
-                        ),
+                        marker={
+                            "color": COLOR_HARVEST,
+                            "size": 13,
+                            "symbol": "square",
+                            "line": {"color": "white", "width": 1},
+                        },
                         customdata=customdata,
                         hovertemplate=(
                             "<b>Harvest</b><br>"
@@ -237,15 +247,18 @@ def make_farm_season_figure(farm, season):
                             "<extra></extra>"
                         ),
                     ),
-                    row=r, col=c,
+                    row=r,
+                    col=c,
                 )
                 harvest_legend_shown = True
 
             # Harvests with no line length → vertical dashed lines (no legend entry)
             for d in no_yield_dates:
                 fig.add_vline(
-                    x=d, line=dict(color=COLOR_HARVEST, dash="dash", width=1),
-                    row=r, col=c,
+                    x=d,
+                    line={"color": COLOR_HARVEST, "dash": "dash", "width": 1},
+                    row=r,
+                    col=c,
                 )
 
         fig.update_xaxes(title_text="Date", row=r, col=c, tickangle=-30)
@@ -256,31 +269,34 @@ def make_farm_season_figure(farm, season):
     top_margin = 110  # 24 figure title + ~28 legend strip + spacing
     total_height = plot_height_px + top_margin
     fig.update_layout(
-        title=dict(
-            text=f"<b>{farm} — {season}</b>",
-            x=0.01, xanchor="left",
-            y=0.99, yanchor="top",
-            font=dict(size=13),
-        ),
+        title={
+            "text": f"<b>{farm} — {season}</b>",
+            "x": 0.01,
+            "xanchor": "left",
+            "y": 0.99,
+            "yanchor": "top",
+            "font": {"size": 13},
+        },
         height=total_height,
-        margin=dict(l=50, r=20, t=top_margin, b=50),
-        legend=dict(
-            orientation="h",
-            yref="container",
-            yanchor="top",
-            y=1 - 32 / total_height,  # 32px below top
-            xanchor="right", x=0.99,
-            bgcolor="rgba(255,255,255,0.85)",
-            font=dict(size=10),
-            tracegroupgap=4,
-        ),
+        margin={"l": 50, "r": 20, "t": top_margin, "b": 50},
+        legend={
+            "orientation": "h",
+            "yref": "container",
+            "yanchor": "top",
+            "y": 1 - 32 / total_height,  # 32px below top
+            "xanchor": "right",
+            "x": 0.99,
+            "bgcolor": "rgba(255,255,255,0.85)",
+            "font": {"size": 10},
+            "tracegroupgap": 4,
+        },
         hovermode="closest",
         template="plotly_white",
-        font=dict(size=11),
+        font={"size": 11},
     )
     # Make subplot title fonts smaller
     for ann in fig["layout"]["annotations"]:
-        ann["font"] = dict(size=11)
+        ann["font"] = {"size": 11}
 
     return fig, sorted(facet_tags_all)
 
@@ -303,6 +319,7 @@ fs_pairs = fs_pairs.sort_values(["_farm_num", "Season"]).drop(columns=["_farm_nu
 
 user_df = ALL["User"].set_index("Anon Farm")
 
+
 # Pre-compute per-farm-season stats needed for the rollup tag set
 def farm_season_rollup_tags(farm, season):
     """Tags applied at the farm-season level (rolled up from facets)."""
@@ -317,7 +334,7 @@ def farm_season_rollup_tags(farm, season):
         tags.append("0-samples")
     elif len(samples) == 1:
         tags.append("1-sample")
-    elif len(samples) < 5:
+    elif len(samples) < 5:  # noqa: PLR2004 -- matches the "5+samples" tag
         tags.append(f"{len(samples)}-samples")
     else:
         tags.append("5+samples")
@@ -336,7 +353,7 @@ def farm_season_rollup_tags(farm, season):
         tags.append("no-line-info")
     # Species variety
     species = g["species_key"][g["species_key"] != "unspecified"].unique()
-    if len(species) >= 2:
+    if len(species) >= 2:  # noqa: PLR2004 -- "multi" means more than one
         tags.append("multi-species")
     # Analysis-ready: has at least 1 sample AND at least 1 harvest
     if len(samples) > 0 and len(harvests) > 0:
@@ -363,15 +380,12 @@ for _, r in fs_pairs.iterrows():
     meta_html = ""
     if farm in user_df.index:
         meta = user_df.loc[farm]
-        try:
-            meta_html = (
-                f'<div class="farm-meta">'
-                f"<b>Location:</b> {meta.get('City', '?')}, {meta.get('State', '?')}, {meta.get('Country', '?')} &nbsp; "
-                f"<b>Acres:</b> {meta.get('Farm Acres', '?')}"
-                f"</div>"
-            )
-        except Exception:
-            pass
+        meta_html = (
+            f'<div class="farm-meta">'
+            f"<b>Location:</b> {meta.get('City', '?')}, {meta.get('State', '?')}, {meta.get('Country', '?')} &nbsp; "
+            f"<b>Acres:</b> {meta.get('Farm Acres', '?')}"
+            f"</div>"
+        )
 
     result = make_farm_season_figure(farm, season)
     if result is None or result[0] is None:
@@ -387,10 +401,14 @@ for _, r in fs_pairs.iterrows():
 
     # Show: real line numbers seen (excluding "unspecified" and "multi: …"), or "none"
     g_fs = sh[(sh["Anon Farm"] == farm) & (sh["Season"] == season)]
-    specified_lines = sorted({
-        ln for ln in g_fs["line_key"].unique()
-        if ln != "unspecified" and not ln.startswith("multi")
-    }, key=lambda x: int(x))
+    specified_lines = sorted(
+        {
+            ln
+            for ln in g_fs["line_key"].unique()
+            if ln != "unspecified" and not ln.startswith("multi")
+        },
+        key=lambda x: int(x),
+    )
     if specified_lines:
         lines_str = ", ".join(specified_lines)
     else:
@@ -402,7 +420,7 @@ for _, r in fs_pairs.iterrows():
     chip_html = "".join(f'<span class="chip chip-{t}">{t}</span>' for t in rollup)
 
     sections.append(
-        f'''
+        f"""
         <section id="{anchor}" class="farm-season" data-tags="{' '.join(rollup)}">
           <h2>{farm} &mdash; {season}</h2>
           {meta_html}
@@ -415,7 +433,7 @@ for _, r in fs_pairs.iterrows():
           <div class="tags">{chip_html}</div>
           {plot_html}
         </section>
-        '''
+        """
     )
 
 css = """
